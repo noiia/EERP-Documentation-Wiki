@@ -4,6 +4,8 @@ EERP is an open-source, modular ERP framework built around three principles: **t
 
 This documentation is written for developers joining the project. It explains not just what the code does, but _why_ it was built this way.
 
+Our graphify : [graphify-eerp](https://graphify.eerp.elnoia.fr)
+
 ---
 
 ## What EERP is
