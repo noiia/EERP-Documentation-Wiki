@@ -1,0 +1,16 @@
+services:
+  docs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: eerp-docs:latest
+    restart: unless-stopped
+    ports:
+      - "9080:80"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true

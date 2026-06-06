@@ -1,0 +1,110 @@
+site_name: EERP Developer Documentation
+site_description: Technical reference for developers working on the EERP framework
+site_author: EERP Contributors
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      title: On this page
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/your-org/eerp
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Architecture:
+      - Overview: architecture/index.md
+  - Core Components:
+      - ORM: core/orm.md
+      - Module System: core/module-system.md
+      - Database Layer: core/database.md
+      - Configuration: core/configuration.md
+      - HTTP Pipeline: core/http-pipeline.md
+      - Automatic Router: core/router.md
+      - Dependency Injection: core/dependency-injection.md
+      - Services: core/services.md
+      - Authentication: core/authentication.md
+      - Permissions: core/permissions.md
+      - Error Handling: core/error-handling.md
+  - Developer Guide:
+      - Creating a Module: developer-guide/creating-a-module.md
+      - Creating an Entity: developer-guide/creating-an-entity.md
+      - Testing: developer-guide/testing.md
+      - Deployment: developer-guide/deployment.md
+  - ADRs:
+      - Overview: adrs/index.md
+      - "ADR-001: Custom ORM": adrs/001-custom-orm.md
+      - "ADR-002: WASM Modules": adrs/002-wasm-modules.md
+      - "ADR-003: Soft Delete by Default": adrs/003-soft-delete.md
+      - "ADR-004: CSR-Only Frontend": adrs/004-csr-frontend.md
