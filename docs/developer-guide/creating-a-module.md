@@ -1,12 +1,20 @@
-# Creating a Module
+# Creating a Module (WASM / Rust Path)
 
-This guide walks you through creating a new EERP business module from scratch. We'll build a simple `hr` (Human Resources) module as a running example.
+!!! info "Two paths available"
+    EERP supports two module implementation strategies:
+
+    - **WASM / Rust** (this guide) — Rust crate compiles to `.wasm`; the core calls `migrate()` at startup for sandboxed schema declaration. Business logic lives in a companion Go service.
+    - **Go monolith** ([Creating a Go Module](creating-a-go-module.md)) — schema declared in Go; all logic compiled directly into the core binary. This is the current approach for all shipped modules.
+
+    You can mix both: use the WASM path for schema isolation and the Go service for business logic in the same module.
+
+This guide walks you through the WASM path using `hr` (Human Resources) as a running example.
 
 ---
 
 ## Before You Start
 
-A module is a Rust crate that compiles to WebAssembly. You need:
+The WASM component is a Rust crate that compiles to WebAssembly. You need:
 
 - Rust stable toolchain
 - `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`
@@ -133,17 +141,17 @@ pub extern "C" fn migrate_len() -> usize {
 
 ## Step 5: Implement Business Logic
 
-Business logic runs in Go inside the module's service struct. Create the Go side of your module:
+Business logic runs in Go inside the module's service struct — compiled directly into the core binary. See [Creating a Go Module](creating-a-go-module.md) for the full Go service guide. Below is the companion Go code that pairs with the WASM schema above.
 
 ```
 modules/hr/
 ├── module.json
 ├── Cargo.toml
 ├── src/
-│   └── lib.rs           # Rust → WASM (schema + future handler calls)
+│   └── lib.rs           # Rust → WASM (schema declaration only)
 └── internal/
     ├── employee.go      # Entity definition
-    └── service.go       # Business logic
+    └── service.go       # Business logic (compiled into core)
 ```
 
 **`internal/employee.go`:**
@@ -300,11 +308,20 @@ graph LR
 
 ## Module Checklist
 
+**WASM component (Rust):**
+
 - [ ] `module.json` present with unique `name`
 - [ ] Rust crate with `crate-type = ["cdylib"]`
 - [ ] `migrate()` and `migrate_len()` exported from Rust
 - [ ] Migration JSON is valid (operations reference correct table names)
+- [ ] `.wasm` binary placed in the module directory (auto-discovered by core)
+
+**Go service component:**
+
 - [ ] Go entity embeds `model.BaseModel`
 - [ ] Go entity has `db` struct tags or snake_case field names
 - [ ] `Service.New(db)` constructor wires repositories
+- [ ] Service registered in `cmd/app/main.go`
 - [ ] Module appears in startup logs without errors
+
+See [Creating a Go Module](creating-a-go-module.md) for the Go-only path without a WASM binary.

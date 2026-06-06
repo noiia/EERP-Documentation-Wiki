@@ -32,7 +32,7 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant JWT as JWT Library
 
-    Client->>AuthHandler: POST /api/auth/login {email, password}
+    Client->>AuthHandler: POST /api/v{api_version}/auth/login {email, password}
     AuthHandler->>DB: SELECT user WHERE email=$1
     DB-->>AuthHandler: User row
     AuthHandler->>AuthHandler: bcrypt.CompareHashAndPassword
@@ -127,7 +127,7 @@ sequenceDiagram
     participant Client
     participant Server
 
-    Client->>Server: POST /api/auth/refresh {refresh_token}
+    Client->>Server: POST /api/v{api_version}/auth/refresh {refresh_token}
     Server->>Server: Validate refresh_token (signature + expiry)
     Server->>Server: Issue new access_token (1h) + new refresh_token (7d)
     Server-->>Client: {access_token, refresh_token}

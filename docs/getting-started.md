@@ -25,8 +25,8 @@ rustup target add wasm32-unknown-unknown
 ## Clone and Configure
 
 ```bash
-git clone https://github.com/your-org/eerp.git
-cd eerp
+git clone https://github.com/noiia/EERP.git
+cd EERP
 ```
 
 Copy and adjust the runtime configuration:

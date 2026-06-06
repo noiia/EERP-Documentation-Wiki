@@ -1,37 +1,59 @@
 # Module System
 
-The module system is the core extension mechanism of EERP. It allows independent business domains (CRM, Inventory, Accounting) to be developed, compiled, and deployed without modifying the core runtime.
+The module system is the core extension mechanism of EERP. It allows independent business domains (CRM, Inventory, Accounting) to be developed and wired into the runtime without modifying the core.
 
 ---
 
 ## Purpose
 
-In a traditional monolithic ERP, adding a new feature means modifying the core. Over time, this creates a tightly coupled system where business logic and infrastructure concerns are intertwined.
+In a traditional monolithic ERP, adding a new feature means modifying the core. EERP inverts this: the core is a stable runtime; business features are pluggable modules.
 
-EERP solves this by treating the core as a **stable runtime** and business features as **pluggable WASM binaries**. The core provides infrastructure (database, HTTP, auth); modules provide business logic.
+EERP uses a **hybrid module model** with two distinct components per module:
+
+| Component | Runs when | Responsibility |
+|---|---|---|
+| WASM binary (Rust) | Startup only | Schema declaration via `migrate()` ABI |
+| Go service (monolith) | Every request | Business logic, ORM queries, HTTP handlers |
+
+The WASM boundary is crossed once per module per startup — not on each request. This gives sandboxed schema ownership without any per-request serialization cost.
+
+> **Current state**: the CRM module ships as a pure Go service (`core/modules/crm/`). The Wasmtime loader is live; `.wasm` binaries are the next step for full schema decoupling.
 
 ---
 
 ## Responsibilities
 
-- Discover modules by scanning the filesystem
-- Validate module metadata and resolve dependencies
-- Load and instantiate WASM binaries in a sandboxed environment
-- Apply per-module database schema migrations
-- Define the contract (ABI) between modules and the core
+- Discover modules by scanning the filesystem (`module_root` in config)
+- Validate module metadata (`module.json`) and resolve the dependency graph
+- Load and instantiate WASM binaries in a sandboxed Wasmtime environment
+- Call `migrate()` / `migrate_len()`, read linear memory, apply DDL
+- Define the ABI contract between modules and the core
+- Wire Go services into the application at startup
 
 ---
 
 ## Module Anatomy
 
-A module is a directory containing two required files:
+A full hybrid module contains:
 
 ```
 modules/crm/
-├── module.json       # Module metadata and dependency declaration
-├── crm.wasm          # Compiled Rust binary (auto-discovered)
-└── src/              # Rust source (not read by core)
-    └── lib.rs
+├── module.json           # Module metadata and dependency declaration
+├── crm.wasm              # Compiled Rust binary (WASM schema protocol)
+├── src/                  # Rust source (not read by core)
+│   └── lib.rs            # migrate() + migrate_len() exports
+└── internal/             # Go source (compiled into core binary)
+    ├── crm.go            # Contact entity + Service (business logic)
+    └── handlers.go       # HTTP handlers (future)
+```
+
+A Go-only module (current approach) omits the `src/` and `.wasm` parts:
+
+```
+modules/crm/
+├── module.json
+└── internal/
+    └── crm.go
 ```
 
 ### module.json
@@ -72,10 +94,14 @@ stateDiagram-v2
     [*] --> Discovered: Filesystem scan finds module.json
     Discovered --> Validated: Metadata parsed and validated
     Validated --> Ordered: Dependency graph resolved, priority assigned
-    Ordered --> Instantiated: WASM binary loaded into Wasmtime
-    Instantiated --> Migrated: migrate() called, schema changes applied
-    Migrated --> Active: Module ready to serve requests
+    Ordered --> WASMInstantiated: .wasm binary loaded into Wasmtime
+    WASMInstantiated --> Migrated: migrate() called, schema changes applied to PG
+    Migrated --> GoWired: Go service instantiated (crm.New(db))
+    GoWired --> Active: Module ready to serve requests
     Active --> [*]: Shutdown
+
+    note right of WASMInstantiated: Skipped if no .wasm found
+    note right of GoWired: Current active path for all modules
 ```
 
 ---
@@ -263,6 +289,8 @@ graph LR
     loader -->|uses| wasmtime["Wasmtime engine"]
     loader -->|executes DDL via| db["orm.DB"]
     loader -->|reads| snapshot["cache/modules (change detection)"]
+    main -->|wires| gosvcs["Go services (e.g. crm.New(db))"]
+    gosvcs -->|queries via| db
 ```
 
 ---

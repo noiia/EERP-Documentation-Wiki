@@ -24,13 +24,13 @@ In a module-based ERP, routes cannot be hardcoded in the core — modules don't 
 
 ## Route Namespace Convention
 
-Every module's routes are automatically prefixed with `/api/{module_name}/`:
+Every module's routes are automatically prefixed with `/api/v{api_version}/{module_name}/`:
 
 | Module | Declared path | Effective path |
 |---|---|---|
-| `crm` | `/contacts` | `/api/crm/contacts` |
-| `crm` | `/contacts/{id}` | `/api/crm/contacts/{id}` |
-| `inventory` | `/items` | `/api/inventory/items` |
+| `crm` | `/contacts` | `/api/v{api_version}/crm/` |
+| `crm` | `/contacts/{id}` | `/api/v{api_version}/crm/{id}` |
+| `inventory` | `/items` | `/api/v{api_version}/inventory/items` |
 
 This prevents collisions without requiring module authors to know about other modules.
 
@@ -46,13 +46,13 @@ sequenceDiagram
     participant Mux as HTTP Mux
 
     Loader->>WASM: Instantiate module
-    WASM->>Router: register_route("GET", "/contacts", handler_id=1)
-    WASM->>Router: register_route("POST", "/contacts", handler_id=2)
-    WASM->>Router: register_route("GET", "/contacts/{id}", handler_id=3)
-    Router->>Router: Prefix with /api/crm/
-    Router->>Mux: mux.Handle("GET /api/crm/contacts", dispatch(crm, 1))
-    Router->>Mux: mux.Handle("POST /api/crm/contacts", dispatch(crm, 2))
-    Router->>Mux: mux.Handle("GET /api/crm/contacts/{id}", dispatch(crm, 3))
+    WASM->>Router: register_route("GET", "/crm", handler_id=1)
+    WASM->>Router: register_route("POST", "/crm", handler_id=2)
+    WASM->>Router: register_route("GET", "/crm/{id}", handler_id=3)
+    Router->>Router: Prefix with /api/v{api_version}/crm/
+    Router->>Mux: mux.Handle("GET /api/v{api_version}/crm/", dispatch(crm, 1))
+    Router->>Mux: mux.Handle("POST /api/v{api_version}/crm/", dispatch(crm, 2))
+    Router->>Mux: mux.Handle("GET /api/v{api_version}/crm/{id}", dispatch(crm, 3))
     Loader->>Mux: Freeze route table (no more registrations at runtime)
 ```
 
@@ -96,11 +96,11 @@ The core itself registers a small number of routes outside the module namespace:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/health` | Liveness probe |
-| `GET` | `/ready` | Readiness probe (DB connectivity) |
-| `GET` | `/api/modules` | List loaded modules and their versions |
-| `POST` | `/api/auth/login` | Issue an authentication token |
-| `POST` | `/api/auth/refresh` | Refresh a token |
+| `GET` | `/api/v{api_version}/health` | Liveness probe |
+| `GET` | `/api/v{api_version}/ready` | Readiness probe (DB connectivity) |
+| `GET` | `/api/v{api_version}/modules` | List loaded modules and their versions |
+| `POST` | `/api/v{api_version}/auth/login` | Issue an authentication token |
+| `POST` | `/api/v{api_version}/auth/refresh` | Refresh a token |
 
 ---
 

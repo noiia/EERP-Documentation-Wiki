@@ -26,11 +26,11 @@ The CRM module's `Service` is the reference implementation (`core/modules/crm/in
 
 ```go
 type Service struct {
-    contacts *orm.Repository[Contact]  // (1)
-    db       *orm.DB                   // (2)
+    contacts *orm.Repository[Contact]  //(1)
+    db       *orm.DB                   //(2)
 }
 
-func New(db *orm.DB) *Service {        // (3)
+func New(db *orm.DB) *Service {        //(3)
     return &Service{
         contacts: orm.MustRepo[Contact](db),
         db:       db,
@@ -159,7 +159,7 @@ stateDiagram-v2
     Created --> Ready: Repositories initialized (MustRepo panics on bad config)
     Ready --> Handling: Use case called from HTTP handler or another service
     Handling --> Ready: Operation complete
-    Ready --> [*]: Shutdown (no cleanup needed; DB pool handles connections)
+    Ready --> [*]: Shutdown (no cleanup needed, DB pool handles connections)
 ```
 
 Services are **stateless** after construction. The only state they hold is the repository and DB references, which are themselves stateless (the pool manages actual connections).

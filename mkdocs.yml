@@ -78,7 +78,7 @@ plugins:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/your-org/eerp
+      link: https://github.com/noiia/EERP.git
 
 nav:
   - Home: index.md
@@ -98,7 +98,8 @@ nav:
       - Permissions: core/permissions.md
       - Error Handling: core/error-handling.md
   - Developer Guide:
-      - Creating a Module: developer-guide/creating-a-module.md
+      - "Creating a Module (WASM/Rust)": developer-guide/creating-a-module.md
+      - "Creating a Module (Go monolith)": developer-guide/creating-a-go-module.md
       - Creating an Entity: developer-guide/creating-an-entity.md
       - Testing: developer-guide/testing.md
       - Deployment: developer-guide/deployment.md

@@ -85,9 +85,9 @@ Permissions are declared alongside routes. The exact mechanism depends on how th
 
 ```go
 // Core routes (illustrative)
-router.GET("/api/crm/contacts",     handler.ListContacts,   require("crm:contacts:read"))
-router.POST("/api/crm/contacts",    handler.CreateContact,  require("crm:contacts:write"))
-router.DELETE("/api/crm/contacts/{id}", handler.DeleteContact, require("crm:contacts:delete"))
+router.GET("/api/v{api_version}/crm/",     handler.ListContacts,   require("crm:contacts:read"))
+router.POST("/api/v{api_version}/crm/",    handler.CreateContact,  require("crm:contacts:write"))
+router.DELETE("/api/v{api_version}/crm/{id}", handler.DeleteContact, require("crm:contacts:delete"))
 ```
 
 For WASM module routes, permissions are declared at route registration time:

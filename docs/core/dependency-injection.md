@@ -69,8 +69,8 @@ graph TD
     ML["Module Loader"] -->|receives| DB
     ML -->|receives| Config
 
-    CRM["crm.Service"] -->|receives via New()| DB
-    INV["inventory.Service"] -->|receives via New()| DB
+    CRM["crm.Service"] -->|"receives via New()"| DB
+    INV["inventory.Service"] -->|"receives via New()"| DB
 
     CRM -->|creates internally| ContactRepo["Repository[Contact]"]
     INV -->|creates internally| ItemRepo["Repository[Item]"]

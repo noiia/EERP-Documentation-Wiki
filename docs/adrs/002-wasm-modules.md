@@ -1,6 +1,6 @@
 # ADR-002: WebAssembly for Module Isolation
 
-**Status**: Accepted
+**Status**: Accepted (hybrid model — see Amendment below)
 **Date**: 2024
 
 ---
@@ -88,3 +88,22 @@ Compile all modules into the core binary at build time.
 **Rejected because:**
 - **Defeats the purpose**: Every module addition requires recompiling and redeploying the core. The business value of a module system is independent deployment.
 - **Dependency conflicts**: All modules share the same dependency tree; conflicting versions cannot coexist.
+
+---
+
+## Amendment: Hybrid Module Model (2025)
+
+The original decision assumed all module functionality would run inside WASM. In practice, routing every HTTP request through the WASM boundary adds serialization overhead that is unnecessary for most ERP operations (which are already database-bound).
+
+**The amended decision** splits module responsibilities:
+
+| Responsibility | Mechanism | Rationale |
+|---|---|---|
+| Schema declaration | WASM `migrate()` ABI (Rust) | Sandboxed; language-agnostic; runs once at startup |
+| Business logic | Go service compiled into core binary | Zero IPC overhead; full ORM access; single binary deploy |
+
+This preserves the original goals for schema (isolation, language agnosticism, independent schema evolution) while avoiding WASM overhead at request time.
+
+**Current state**: all shipped modules (`crm`, etc.) run as Go services. The Wasmtime loader is implemented and active in `core/internal/module/load.go`; Rust-compiled `.wasm` binaries are the roadmap for full schema decoupling.
+
+The "Static compilation (monorepo)" alternative above is still rejected for business logic. The hybrid model is effectively a specialised form of it for the narrow schema-declaration concern, where the tradeoffs are acceptable: schema migrations run once per startup, not per request.
