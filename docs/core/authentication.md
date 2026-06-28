@@ -1,10 +1,5 @@
 # Authentication
 
-!!! note "Implementation status"
-    Authentication is a planned component. The `master_key` field in the configuration is the foundation; the JWT issuance and validation logic is not yet implemented. This page documents the intended design.
-
----
-
 ## Purpose
 
 Authentication answers the question: **who is making this request?** Every non-public endpoint must establish an identity before allowing the request to proceed.
@@ -17,13 +12,25 @@ Authentication answers the question: **who is making this request?** Every non-p
 - Validate tokens on every protected request
 - Inject the authenticated identity into the request context
 - Refresh tokens before they expire
-- Invalidate tokens on logout
+- Revoke sessions on logout and on token replay detection
 
 ---
 
-## Intended Design: JWT with `master_key`
+## JWT with `master_key`
 
-EERP uses stateless JWT authentication. The `master_key` from `eerp-config.json` is the HMAC signing key. No external identity provider is required for basic deployments.
+EERP uses stateless JWT authentication. The `master_key` from `eerp-config.json` is the HMAC-SHA256 signing key. No external identity provider is required for basic deployments.
+
+Token TTLs are configurable via `eerp-config.json`:
+
+| Config field | Default | Purpose |
+|---|---|---|
+| `master_key` | — | HMAC-SHA256 signing secret (required, must not be empty) |
+| `access_ttl_seconds` | 3600 (1 h) | Access token lifetime |
+| `refresh_ttl_seconds` | 604800 (7 d) | Refresh token lifetime |
+
+---
+
+## Login Flow
 
 ```mermaid
 sequenceDiagram
@@ -32,61 +39,91 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant JWT as JWT Library
 
-    Client->>AuthHandler: POST /api/v{api_version}/auth/login {email, password}
+    Client->>AuthHandler: POST /api/v1/auth/login {email, password}
     AuthHandler->>DB: SELECT user WHERE email=$1
-    DB-->>AuthHandler: User row
+    DB-->>AuthHandler: User row (or not found)
+    note over AuthHandler: If user not found, run dummy bcrypt<br/>to prevent timing attacks
     AuthHandler->>AuthHandler: bcrypt.CompareHashAndPassword
-    AuthHandler->>JWT: Sign({sub: user_id, tenant: tenant_id, roles: [...], exp: now+1h})
-    JWT-->>AuthHandler: access_token (signed with master_key)
-    AuthHandler->>JWT: Sign({sub: user_id, exp: now+7d})
-    JWT-->>AuthHandler: refresh_token
-    AuthHandler-->>Client: {access_token, refresh_token}
+    AuthHandler->>JWT: Sign({sub, tenant, roles, iat, exp=now+access_ttl})
+    JWT-->>AuthHandler: access_token
+    AuthHandler->>AuthHandler: Generate refresh token, store bcrypt hash in DB
+    AuthHandler-->>Client: JSON body {access_token, token_type: "Bearer", expires_in}<br/>+ Set-Cookie: refresh_token=<token>; HttpOnly; Secure; SameSite=Strict
 ```
 
-### Token Payload
+!!! important "Refresh token transport"
+    The refresh token is **never returned in the response body**. It is delivered exclusively as an `HttpOnly; Secure; SameSite=Strict` cookie named `refresh_token`. This prevents JavaScript access and CSRF abuse.
+
+### Login Response Body
+
+```json
+{
+    "access_token": "eyJ...",
+    "token_type": "Bearer",
+    "expires_in": 3600
+}
+```
+
+---
+
+## Access Token Payload
 
 ```json
 {
     "sub": "01J...",
     "tenant": "01J...",
-    "roles": ["admin", "crm:write"],
+    "roles": ["admin", "crm_user"],
     "iat": 1705312200,
     "exp": 1705315800
 }
 ```
 
-| Claim | Description |
-|---|---|
-| `sub` | User ID (UUID) |
-| `tenant` | Tenant/organisation ID |
-| `roles` | Effective roles for permission checks |
-| `iat` | Issued at |
-| `exp` | Expiry (access: 1h, refresh: 7d) |
+| Claim | Type | Description |
+|---|---|---|
+| `sub` | UUID string | User ID |
+| `tenant` | UUID string | Tenant/organisation ID |
+| `roles` | `[]string` | Effective role names for permission checks |
+| `iat` | Unix timestamp | Issued at |
+| `exp` | Unix timestamp | Expiry |
 
 ---
 
-## Validation Middleware
+## JWT Validation Middleware
 
-On every protected request:
+On every protected request the JWT middleware:
 
 ```mermaid
 flowchart TD
     A["Extract Authorization header"] --> B{Bearer token present?}
-    B -- No --> C["401 Unauthorized"]
+    B -- No --> C["401 UNAUTHENTICATED"]
     B -- Yes --> D["jwt.Parse(token, masterKey)"]
     D --> E{Valid signature?}
-    E -- No --> F["401 Unauthorized"]
-    E --> G{Expired?}
-    G -- Yes --> H["401 Unauthorized\n(hint: use refresh endpoint)"]
-    G -- No --> I["Inject Identity into context"]
-    I --> J["Next middleware / handler"]
+    E -- No --> F["401 UNAUTHENTICATED"]
+    E -- Yes --> G{Expired?}
+    G -- Yes --> H["401 UNAUTHENTICATED"]
+    G -- No --> I["Build Identity struct"]
+    I --> J["SetIdentity(ctx, identity)"]
+    J --> K["Next middleware / handler"]
 ```
+
+Authentication errors use a uniform error envelope — see [HTTP Pipeline](http-pipeline.md#error-envelope).
 
 ---
 
 ## Identity in Context
 
-Downstream handlers and services retrieve the identity from context:
+The JWT middleware injects the authenticated identity into the Echo context. Downstream handlers retrieve it via two accessors:
+
+```go
+// Safe retrieval — returns false if identity is missing (e.g. on public routes)
+identity, ok := auth.IdentityFromContext(ctx)
+
+// Strict retrieval — panics if identity is missing
+// Use only inside handlers that are guaranteed to be behind JWTMiddleware.
+// A panic here indicates a middleware wiring bug, not a user error.
+identity := auth.MustIdentity(ctx)
+```
+
+The `Identity` struct:
 
 ```go
 type Identity struct {
@@ -94,18 +131,16 @@ type Identity struct {
     TenantID uuid.UUID
     Roles    []string
 }
-
-func IdentityFromContext(ctx context.Context) (Identity, bool) {
-    id, ok := ctx.Value(identityKey{}).(Identity)
-    return id, ok
-}
 ```
 
-Services use `IdentityFromContext` when they need to filter by tenant or check roles:
+Services use `IdentityFromContext` to filter by tenant or scope business logic:
 
 ```go
 func (s *Service) ListContacts(ctx context.Context) ([]Contact, error) {
-    identity, _ := auth.IdentityFromContext(ctx)
+    identity, ok := auth.IdentityFromContext(ctx)
+    if !ok {
+        return nil, errors.New("unauthenticated")
+    }
     return s.contacts.Query().
         Where(orm.Cond("tenant_id = $1", identity.TenantID)).
         All(ctx, s.db)
@@ -114,27 +149,70 @@ func (s *Service) ListContacts(ctx context.Context) ([]Contact, error) {
 
 ---
 
-## Multi-Tenancy
+## Token Refresh
 
-Every entity that belongs to a tenant has a `tenant_id` column. The authentication middleware injects the tenant ID from the token; services filter by it. The ORM provides no automatic tenant filter — services are responsible for applying the `WHERE tenant_id = $1` condition.
-
----
-
-## Token Rotation
+The refresh endpoint accepts the refresh token from the `refresh_token` cookie, falling back to a `{"refresh_token": "..."}` JSON body if the cookie is absent.
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant Server
+    participant DB as PostgreSQL
 
-    Client->>Server: POST /api/v{api_version}/auth/refresh {refresh_token}
-    Server->>Server: Validate refresh_token (signature + expiry)
-    Server->>Server: Issue new access_token (1h) + new refresh_token (7d)
-    Server-->>Client: {access_token, refresh_token}
-    note over Server: Old refresh_token is now invalid (rotation)
+    Client->>Server: POST /api/v1/auth/refresh<br/>(cookie: refresh_token=<token>)
+    Server->>DB: SELECT refresh_tokens WHERE user_id=... AND NOT revoked
+    DB-->>Server: Stored bcrypt hash
+    Server->>Server: bcrypt.Compare(incoming token, stored hash)
+    alt Token matches and not expired
+        Server->>DB: Revoke old refresh token row
+        Server->>Server: Issue new access_token + new refresh_token
+        Server->>DB: Store new refresh token hash
+        Server-->>Client: JSON {access_token, token_type, expires_in}<br/>+ Set-Cookie: refresh_token=<new_token>
+    else Token already used (replay detected)
+        Server->>DB: RevokeAll — revoke ALL refresh tokens for this user
+        Server-->>Client: 401 UNAUTHENTICATED
+    end
 ```
 
-Refresh tokens are single-use. Presenting a used refresh token invalidates the entire session (theft detection).
+!!! warning "Replay detection"
+    If a refresh token that has already been used is presented again, the server calls `RevokeAll`, invalidating every active session for that user. This indicates a token was stolen and used by an attacker after the legitimate client already consumed it.
+
+Refresh tokens are stored as **bcrypt hashes** in the `refresh_tokens` table. The raw token is never persisted; a database breach does not expose live tokens.
+
+---
+
+## Logout
+
+`POST /api/v1/auth/logout` revokes all refresh tokens for the authenticated user and clears the `refresh_token` cookie by setting `MaxAge=-1`. The short-lived access token remains technically valid until its natural expiry — handlers requiring immediate revocation must check the `revoked` flag separately.
+
+---
+
+## Multi-Tenancy
+
+Every entity that belongs to a tenant has a `tenant_id` column. The authentication middleware injects the tenant ID from the token; services filter by it. The ORM provides no automatic tenant filter — services are responsible for applying `WHERE tenant_id = $1` with the value from the identity context.
+
+---
+
+## Data Models
+
+```go
+// Users — tenant-scoped accounts
+type Users struct {
+    model.BaseModel          // uuid PK, created_at, updated_at, deleted_at
+    TenantID     uuid.UUID `db:"tenant_id"`
+    Email        string    `db:"email"`
+    PasswordHash string    `db:"password_hash"`
+}
+
+// RefreshTokens — one row per active session
+type RefreshTokens struct {
+    model.BaseModel
+    UserID    uuid.UUID `db:"user_id"`
+    TokenHash string    `db:"token_hash"` // bcrypt hash, never raw
+    ExpiresAt time.Time `db:"expires_at"`
+    Revoked   bool      `db:"revoked"`
+}
+```
 
 ---
 
@@ -142,13 +220,17 @@ Refresh tokens are single-use. Presenting a used refresh token invalidates the e
 
 ```mermaid
 graph LR
-    Config["eerp-config.json\n(master_key)"] -->|signs with| JWT["JWT Library"]
-    AuthMiddleware -->|validates with| JWT
-    AuthMiddleware -->|injects| Context["request context\n(Identity)"]
+    Config["eerp-config.json\n(master_key, access_ttl_seconds,\nrefresh_ttl_seconds)"] -->|signs with| JWT["JWT Library"]
+    JWTMiddleware -->|validates with| JWT
+    JWTMiddleware -->|injects| Context["request context\n(Identity)"]
     LoginHandler -->|issues| JWT
+    LoginHandler -->|stores hash| DB["refresh_tokens table"]
+    RefreshHandler -->|validates hash| DB
     Services -->|reads from| Context
-    Permissions -->|reads roles from| Context
+    PermissionMW["Permission Middleware"] -->|reads roles from| Context
 ```
+
+See also: [Permissions](permissions.md), [HTTP Pipeline](http-pipeline.md).
 
 ---
 

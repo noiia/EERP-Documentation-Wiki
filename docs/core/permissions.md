@@ -1,32 +1,29 @@
 # Permissions
 
-!!! note "Implementation status"
-    The permissions system is planned. The role claims in the JWT token (see [Authentication](authentication.md)) are the foundation. The enforcement middleware and the permission DSL are not yet implemented.
-
----
-
 ## Purpose
 
 Authentication establishes _who_ is making a request. Permissions answer _what that identity is allowed to do_. The two are distinct layers: authentication is always required first; permissions are applied per endpoint.
+
+See [Authentication](authentication.md) for how identities are established and [HTTP Pipeline](http-pipeline.md) for how the middleware stack is ordered.
 
 ---
 
 ## Responsibilities
 
 - Define the permission model (roles, resources, actions)
+- Derive the required permission automatically from the route shape
 - Check permissions before executing handlers
+- Cache permission lookups to avoid per-request DB queries
 - Enforce tenant isolation (no cross-tenant access)
-- Allow modules to declare their own permissions
-- Provide a simple API for handlers to perform ad-hoc checks
 
 ---
 
-## Permission Model
+## Permission DSL
 
-EERP uses **role-based access control (RBAC)** as the foundation, with per-resource action scoping:
+EERP uses **role-based access control (RBAC)** with a three-part permission code:
 
 ```
-permission = role + ":" + resource + ":" + action
+permission = module + ":" + resource + ":" + action
 ```
 
 Examples:
@@ -37,32 +34,52 @@ Examples:
 | `crm:contacts:write` | Create and update contacts |
 | `crm:contacts:delete` | Soft-delete contacts |
 | `inventory:items:read` | Read inventory items |
-| `*:*:read` | Read anything (super-admin read access) |
+| `*:*:*` | Full super-admin access |
 
 Roles are assigned to users at the tenant level. A user may have multiple roles. The effective permission set is the union of all permissions granted by all roles.
 
 ---
 
-## Role Declaration by Modules
+## Wildcard Matching
 
-Modules declare the roles and permissions they define via their `module.json`:
+The permission check supports wildcards so that broad grants like super-admin or module-admin roles do not require enumerating every permission:
 
-```json
-{
-    "name": "crm",
-    "permissions": [
-        { "id": "crm:contacts:read",   "description": "View contacts" },
-        { "id": "crm:contacts:write",  "description": "Create and edit contacts" },
-        { "id": "crm:contacts:delete", "description": "Archive contacts" }
-    ],
-    "default_roles": {
-        "crm_user":  ["crm:contacts:read", "crm:contacts:write"],
-        "crm_admin": ["crm:contacts:read", "crm:contacts:write", "crm:contacts:delete"]
-    }
-}
-```
+| Pattern | Matches |
+|---|---|
+| `*:*:*` | Every permission (super-admin) |
+| `module:*:*` | All actions on all resources in a module |
+| `module:*:action` | A specific action on any resource in a module |
+| `*:*:action` | A specific action across all modules |
+| `*:resource:action` | A specific action on a named resource in any module |
 
-The core reads these declarations at module load time and seeds the permissions table in PostgreSQL.
+The middleware evaluates the exact code first, then all applicable wildcard patterns.
+
+---
+
+## Automatic Route-to-Permission Derivation
+
+Permissions are **not** declared per-route in code. The permission middleware derives the required permission automatically from the URL path and HTTP method.
+
+### Path rules
+
+| Route shape | Example path | Derived permission |
+|---|---|---|
+| Two segments after `/api/v1/` | `GET /api/v1/crm/contacts` | `crm:contacts:read` |
+| One segment after `/api/v1/` | `GET /api/v1/crm` | `crm:crm:read` |
+| Unknown path shape or empty | — | `""` — middleware passes through |
+
+### HTTP method mapping
+
+| HTTP method | Action |
+|---|---|
+| `GET` | `read` |
+| `POST` | `write` |
+| `PUT` | `write` |
+| `PATCH` | `write` |
+| `DELETE` | `delete` |
+| Unknown | `""` — middleware passes through |
+
+When the derived permission is `""` (unknown method or unrecognised path), the middleware does not block the request. This ensures that routes outside the standard CRUD shape are not accidentally denied.
 
 ---
 
@@ -70,64 +87,38 @@ The core reads these declarations at module load time and seeds the permissions 
 
 ```mermaid
 flowchart TD
-    A["Request arrives with JWT"] --> B["Auth middleware: extract Identity\n(roles from token)"]
-    B --> C["Permission middleware: load required permission\nfrom route annotation"]
-    C --> D{"Identity has required permission?"}
-    D -- No --> E["403 Forbidden"]
-    D -- Yes --> F["Handler executes"]
+    A["Request arrives (JWT already validated)"] --> B["JWT middleware: extract Identity\n(roles from token, injected into context)"]
+    B --> C["Permission middleware: derive required permission\nfrom HTTP method + URL path"]
+    C --> D{Permission string empty?}
+    D -- Yes --> E["Pass through — unknown route shape"]
+    D -- No --> F["PermissionRepository.Has(roles, permission)"]
+    F --> G{Cached result?}
+    G -- Yes --> H{Allowed?}
+    G -- No --> I["DB query: permissions JOIN role_permissions\nJOIN roles WHERE name IN roles"]
+    I --> J["Cache result for 5 minutes"]
+    J --> H
+    H -- No --> K["403 FORBIDDEN"]
+    H -- Yes --> L["Handler executes"]
 ```
 
 ---
 
-## Route Annotation
+## Permission Repository
 
-Permissions are declared alongside routes. The exact mechanism depends on how the router is implemented:
+`PermissionRepository.Has(roles []string, permission string) bool` is the single entry point for permission checks. It:
+
+1. Queries `permissions JOIN role_permissions JOIN roles WHERE r.name IN (roles...)`.
+2. Evaluates both the exact permission code and all applicable wildcard patterns.
+3. Caches the boolean result in a `sync.Map` keyed by `(sorted_roles, permission)` with a 5-minute TTL.
+
+After any write to the `role_permissions` table, call `InvalidateCache()` to flush stale entries:
 
 ```go
-// Core routes (illustrative)
-router.GET("/api/v{api_version}/crm/",     handler.ListContacts,   require("crm:contacts:read"))
-router.POST("/api/v{api_version}/crm/",    handler.CreateContact,  require("crm:contacts:write"))
-router.DELETE("/api/v{api_version}/crm/{id}", handler.DeleteContact, require("crm:contacts:delete"))
+permRepo.InvalidateCache()
 ```
 
-For WASM module routes, permissions are declared at route registration time:
-
-```rust
-register_route("GET", "/contacts", handler_id=1, permission="crm:contacts:read")
-```
-
----
-
-## Ad-Hoc Permission Checks in Handlers
-
-For fine-grained checks that depend on the requested resource (e.g., a user can only edit their own contacts):
-
-```go
-func (h *Handler) UpdateContact(w http.ResponseWriter, r *http.Request) {
-    identity := auth.MustIdentity(r.Context())
-    contact, err := h.svc.GetByID(r.Context(), id)
-    if err != nil { /* … */ }
-
-    // Resource-level check beyond RBAC
-    if contact.TenantID != identity.TenantID {
-        http.Error(w, "forbidden", http.StatusForbidden)
-        return
-    }
-
-    // Proceed
-}
-```
-
----
-
-## Tenant Isolation
-
-Tenant isolation is enforced at two levels:
-
-1. **Token level**: The JWT contains `tenant_id`. All permission checks are scoped to that tenant.
-2. **Query level**: Every service filters by `tenant_id` from the identity context.
-
-A user from tenant A cannot access tenant B's data even if they somehow obtain a valid token for tenant A, because every query includes `WHERE tenant_id = $1` with the value from their token.
+!!! note "Cache scope"
+    The cache is in-process and per-server instance. In a multi-instance deployment, each instance caches independently. A role change is reflected within 5 minutes on all instances without explicit coordination.
 
 ---
 
@@ -139,11 +130,13 @@ erDiagram
         uuid id PK
         uuid tenant_id
         string email
+        string password_hash
     }
     roles {
         uuid id PK
         uuid tenant_id
         string name
+        string description
     }
     permissions {
         uuid id PK
@@ -166,7 +159,22 @@ erDiagram
     permissions ||--o{ role_permissions : granted_by
 ```
 
-Roles and permissions are stored in PostgreSQL. The token contains role names; the middleware resolves the effective permission set by joining `user_roles` → `role_permissions` → `permissions` once per session (result can be cached in the token or in a short-lived in-memory cache).
+`user_roles` and `role_permissions` use composite primary keys and carry no `BaseModel` — they are pure join tables.
+
+### Seeding permissions
+
+Permissions are created by inserting rows into the `permissions` table directly (via API or migration). There is no automatic seeding from `module.json` — permission codes must be created and assigned to roles manually.
+
+---
+
+## Tenant Isolation
+
+Tenant isolation is enforced at two levels:
+
+1. **Token level**: The JWT contains `tenant_id`. All permission checks use role names scoped to that tenant.
+2. **Query level**: Every service filters by `tenant_id` from the identity context.
+
+A user from tenant A cannot access tenant B's data even if they somehow obtain a valid token for tenant A, because every query includes `WHERE tenant_id = $1` with the value from their token.
 
 ---
 
@@ -174,13 +182,15 @@ Roles and permissions are stored in PostgreSQL. The token contains role names; t
 
 ```mermaid
 graph LR
-    JWT["JWT token\n(roles[])"] --> Auth["Auth Middleware"]
-    Auth --> PermMW["Permission Middleware"]
-    PermMW -->|checks| DB["permissions table\n(PostgreSQL)"]
-    PermMW -->|injects| Context["context\n(effective perms)"]
-    Handler -->|reads| Context
-    ModuleLoader["Module Loader"] -->|seeds| DB
+    JWT["JWT token\n(roles[])"] --> JWTMiddleware["JWT Middleware"]
+    JWTMiddleware -->|injects Identity| PermMW["Permission Middleware"]
+    PermMW -->|derives permission from| Route["URL path + HTTP method"]
+    PermMW -->|checks via| PermRepo["PermissionRepository\n(DB + 5-min cache)"]
+    PermRepo -->|queries| DB["permissions table\n(PostgreSQL)"]
+    Handler -->|reads Identity from| Context["request context"]
 ```
+
+See also: [Authentication](authentication.md), [HTTP Pipeline](http-pipeline.md), [Automatic Router](router.md).
 
 ---
 
@@ -188,7 +198,7 @@ graph LR
 
 | Extension | How |
 |---|---|
-| Attribute-based access control (ABAC) | Add resource attributes to the `require()` check; evaluate policy rules |
-| Permission caching | Cache resolved permission sets keyed by `(user_id, tenant_id)` with short TTL |
-| Audit logging | Hook the permission check to write `(user, action, resource, allowed, timestamp)` |
-| Dynamic roles | Allow tenants to create custom roles via the permissions API |
+| Attribute-based access control (ABAC) | Add resource-attribute evaluation after the RBAC check |
+| Shorter cache TTL | Lower the 5-minute TTL in `PermissionRepository` for high-churn role assignments |
+| Audit logging | Wrap `Has()` to write `(user, permission, allowed, timestamp)` before returning |
+| Dynamic roles | Allow tenants to create custom roles via the permissions API; call `InvalidateCache()` after writes |

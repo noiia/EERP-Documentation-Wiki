@@ -12,10 +12,10 @@ A production EERP deployment consists of three components:
 |---|---|---|
 | Core backend | Go binary | VM, container, or bare metal |
 | WASM modules | `.wasm` files + `module.json` | Same host as backend |
-| Frontend | Static files (HTML/JS/CSS) | CDN or static host |
+| Frontend | Next.js front server (Node.js) | VM, container, or Node host |
 | Database | PostgreSQL 18 | Managed service or dedicated VM |
 
-The frontend and backend are deployed independently. The frontend is a static SPA — no server required beyond a file server or CDN.
+The frontend and backend are deployed independently. The frontend is **no longer a static bundle** — it runs as a long-lived Node.js process (the Next.js front server) that owns the session cookie and proxies requests to the Go core (see [ADR-004](../adrs/004-csr-frontend.md)). Plan for a Node runtime, a process manager, and health checks alongside the Go backend.
 
 ---
 
@@ -57,7 +57,13 @@ npm install
 npm run build
 ```
 
-The built output is in `core-front/build/`. Serve this directory with any static file server or deploy to a CDN.
+This produces an optimized Next.js production build in `core-front/.next/`. Start the front server with:
+
+```bash
+npm run start   # next start — serves on :3000 by default
+```
+
+The front server needs the URL of the Go core API (e.g. `CORE_API_URL`) so it can proxy authenticated requests; the Go core itself should sit on a private network and not be exposed directly to the browser. Run the process under a supervisor (systemd, PM2) or as a container, behind the same reverse proxy that fronts the rest of the stack.
 
 ---
 

@@ -97,9 +97,15 @@ nav:
       - Authentication: core/authentication.md
       - Permissions: core/permissions.md
       - Error Handling: core/error-handling.md
+  - Frontend:
+      - Overview: frontend/index.md
+      - "View Engine (@eerp/core-front)": frontend/view-engine.md
+      - Module Discovery: frontend/module-discovery.md
+      - "Authentication (BFF)": frontend/authentication.md
   - Developer Guide:
       - "Creating a Module (WASM/Rust)": developer-guide/creating-a-module.md
       - "Creating a Module (Go monolith)": developer-guide/creating-a-go-module.md
+      - "Creating a Frontend Module": developer-guide/creating-a-frontend-module.md
       - Creating an Entity: developer-guide/creating-an-entity.md
       - Testing: developer-guide/testing.md
       - Deployment: developer-guide/deployment.md
@@ -108,4 +114,5 @@ nav:
       - "ADR-001: Custom ORM": adrs/001-custom-orm.md
       - "ADR-002: WASM Modules": adrs/002-wasm-modules.md
       - "ADR-003: Soft Delete by Default": adrs/003-soft-delete.md
-      - "ADR-004: CSR-Only Frontend": adrs/004-csr-frontend.md
+      - "ADR-004: React Frontend (Next.js + Zustand)": adrs/004-csr-frontend.md
+      - "ADR-005: JWT Authentication with Stateful Refresh Tokens": adrs/005-jwt-auth.md

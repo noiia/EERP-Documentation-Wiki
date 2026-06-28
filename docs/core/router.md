@@ -1,106 +1,135 @@
 # Automatic Router
 
-!!! note "Implementation status"
-    The automatic router is a planned component. This page documents the intended design based on the module system architecture and the principle that modules declare their routes rather than the core knowing about them.
-
----
-
 ## Purpose
 
-In a module-based ERP, routes cannot be hardcoded in the core — modules don't exist yet when the core compiles. The automatic router solves this by letting modules **declare** routes at load time, which the core then wires into the HTTP mux.
+EERP routes cannot be hardcoded in the core — the set of tables (and therefore endpoints) is determined at runtime by which ORM models are registered. The automatic router solves this by generating CRUD routes directly from the ORM registry, so every registered table gets a fully functional HTTP API with zero per-table boilerplate.
 
 ---
 
 ## Responsibilities
 
-- Maintain a route table that maps `(method, path)` to a module handler
-- Accept route registrations from modules at load time
-- Namespace module routes automatically to prevent collisions
-- Generate an API schema (OpenAPI) from registered routes
-- Handle path parameters (`/orders/{id}`) and query parameters
-- Enforce that no two modules register the same route
+- Generate standard CRUD routes for every table in the ORM registry
+- Namespace routes under `/api/v1/{route_prefix}`
+- Apply authentication and permission middleware to all generated routes
+- Mount auth endpoints as a separate public group
+- Provide an override mechanism for the default route prefix
 
 ---
 
-## Route Namespace Convention
+## Route Generation
 
-Every module's routes are automatically prefixed with `/api/v{api_version}/{module_name}/`:
-
-| Module | Declared path | Effective path |
-|---|---|---|
-| `crm` | `/contacts` | `/api/v{api_version}/crm/` |
-| `crm` | `/contacts/{id}` | `/api/v{api_version}/crm/{id}` |
-| `inventory` | `/items` | `/api/v{api_version}/inventory/items` |
-
-This prevents collisions without requiring module authors to know about other modules.
-
----
-
-## Route Registration Flow
-
-```mermaid
-sequenceDiagram
-    participant Loader as Module Loader
-    participant WASM as CRM Module
-    participant Router as Route Registry
-    participant Mux as HTTP Mux
-
-    Loader->>WASM: Instantiate module
-    WASM->>Router: register_route("GET", "/crm", handler_id=1)
-    WASM->>Router: register_route("POST", "/crm", handler_id=2)
-    WASM->>Router: register_route("GET", "/crm/{id}", handler_id=3)
-    Router->>Router: Prefix with /api/v{api_version}/crm/
-    Router->>Mux: mux.Handle("GET /api/v{api_version}/crm/", dispatch(crm, 1))
-    Router->>Mux: mux.Handle("POST /api/v{api_version}/crm/", dispatch(crm, 2))
-    Router->>Mux: mux.Handle("GET /api/v{api_version}/crm/{id}", dispatch(crm, 3))
-    Loader->>Mux: Freeze route table (no more registrations at runtime)
-```
-
-After all modules have loaded, the route table is frozen. New routes cannot be registered without a restart.
-
----
-
-## Handler Dispatch
-
-When a request arrives at a module route, the core:
-
-1. Extracts the matched `handler_id` and module instance
-2. Serializes the request (headers, path params, body) into a WASM-compatible format
-3. Calls the module's `handle(handler_id, request_ptr, request_len)` export
-4. Reads the response from WASM linear memory
-5. Writes the response to the HTTP response writer
-
-```mermaid
-sequenceDiagram
-    participant Mux
-    participant Dispatch as Core Dispatcher
-    participant WASM as Module Instance
-    participant Memory as WASM Linear Memory
-
-    Mux->>Dispatch: Route matched (module=crm, handler_id=3, r=Request)
-    Dispatch->>Dispatch: Serialize request → JSON bytes
-    Dispatch->>Memory: Write request bytes at ptr
-    Dispatch->>WASM: handle(3, ptr, len)
-    WASM->>WASM: Deserialize request, run business logic
-    WASM->>Memory: Write response JSON at resp_ptr
-    WASM-->>Dispatch: (resp_ptr, resp_len)
-    Dispatch->>Memory: Read response[resp_ptr : resp_ptr+resp_len]
-    Dispatch->>Dispatch: Write to http.ResponseWriter
-```
-
----
-
-## Core Routes
-
-The core itself registers a small number of routes outside the module namespace:
+Every table registered in the ORM registry gets the following routes under `/api/v1/{route_prefix}`:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/v{api_version}/health` | Liveness probe |
-| `GET` | `/api/v{api_version}/ready` | Readiness probe (DB connectivity) |
-| `GET` | `/api/v{api_version}/modules` | List loaded modules and their versions |
-| `POST` | `/api/v{api_version}/auth/login` | Issue an authentication token |
-| `POST` | `/api/v{api_version}/auth/refresh` | Refresh a token |
+| `GET` | `/{prefix}` | List all records (with soft-delete filter if applicable) |
+| `GET` | `/{prefix}/:id` | Get a single record by ID |
+| `POST` | `/{prefix}` | Create a new record |
+| `PUT` | `/{prefix}/:id` | Update a record |
+| `DELETE` | `/{prefix}/:id` | Delete a record (soft if `deleted_at` present, hard otherwise) |
+| `POST` | `/{prefix}/:id/restore` | Restore a soft-deleted record (only if model has soft-delete) |
+
+The restore route is only generated for models that include `BaseModel` with the `deleted_at` soft-delete field.
+
+---
+
+## Route Prefix
+
+The `route_prefix` defaults to the table name. It can be overridden per-table in `api.yaml`:
+
+```yaml
+tables:
+  contacts:
+    route_prefix: crm/contacts
+```
+
+With the override above, the list endpoint becomes `GET /api/v1/crm/contacts` instead of `GET /api/v1/contacts`.
+
+---
+
+## Registration Flow
+
+```mermaid
+sequenceDiagram
+    participant Main as main.go
+    participant Registry as ORM Registry
+    participant Server as server.RegisterRoutes
+    participant Echo as Echo Router
+
+    Main->>Registry: MustRepo[Users](db), MustRepo[Contacts](db), ...
+    note over Registry: Each MustRepo call registers<br/>the table in the global registry
+    Main->>Server: server.RegisterRoutes(handlers, authGroupFn, jwtMW, permMW)
+    Server->>Registry: Walk all registered tables
+    loop For each table
+        Server->>Echo: Mount CRUD routes on protected /api/v1 group
+    end
+    Main->>Echo: e.Group("/api/v1/auth") → mount login/refresh/logout
+    note over Echo: Auth routes are public — no JWT or Permission middleware
+```
+
+After startup the route table is frozen. New routes cannot be registered without a restart.
+
+---
+
+## Permission Derivation from Routes
+
+The permission middleware automatically derives the required permission from the URL path generated by the router. This means no per-route permission annotation is needed.
+
+| Generated route | HTTP method | Derived permission |
+|---|---|---|
+| `/api/v1/crm/contacts` | `GET` | `crm:contacts:read` |
+| `/api/v1/crm/contacts` | `POST` | `crm:contacts:write` |
+| `/api/v1/crm/contacts/:id` | `PUT` | `crm:contacts:write` |
+| `/api/v1/crm/contacts/:id` | `DELETE` | `crm:contacts:delete` |
+| `/api/v1/contacts` | `GET` | `contacts:contacts:read` |
+
+For single-segment prefixes (e.g. `contacts`), the module and resource parts of the permission code are both set to the table name. For two-segment prefixes (e.g. `crm/contacts`), the first segment is the module and the second is the resource. See [Permissions](permissions.md#automatic-route-to-permission-derivation) for the full derivation rules.
+
+---
+
+## Auth Routes (Public Group)
+
+Auth routes are mounted manually in `main.go` on a separate Echo group **before** the protected group, with no JWT or Permission middleware:
+
+```go
+authGroup := srv.Echo().Group("/api/v1/auth")
+authGroup.POST("/login",   authHandler.Login)
+authGroup.POST("/refresh", authHandler.Refresh)
+authGroup.POST("/logout",  authHandler.Logout)
+```
+
+This ensures login and refresh requests are never blocked by the auth middleware they are bootstrapping.
+
+---
+
+## Startup Sequence
+
+```mermaid
+flowchart TD
+    A["main.go starts"] --> B["Open DB connection"]
+    B --> C["Register ORM repos (MustRepo calls)"]
+    C --> D["Build Echo instance"]
+    D --> E["Apply global middleware\n(RequestID, Logger, Recover, CORS)"]
+    E --> F["Mount public auth group\n(/api/v1/auth — no middleware)"]
+    F --> G["server.RegisterRoutes\n(protected /api/v1/* group with JWT + Permission)"]
+    G --> H["Start Echo on configured port"]
+```
+
+---
+
+## Interactions
+
+```mermaid
+graph LR
+    ORM["ORM Registry\n(MustRepo calls)"] -->|feeds| AutoRouter["server.RegisterRoutes"]
+    AutoRouter -->|mounts on| ProtectedGroup["Protected Echo group\n(/api/v1/*)"]
+    ProtectedGroup -->|guarded by| JWT["JWT Middleware"]
+    JWT --> PermMW["Permission Middleware"]
+    PermMW -->|derives permission from| Route["Route path + method"]
+    AuthHandler["Auth Handlers"] -->|mounted on| PublicGroup["Public Echo group\n(/api/v1/auth)"]
+```
+
+See also: [HTTP Pipeline](http-pipeline.md), [Permissions](permissions.md), [Authentication](authentication.md).
 
 ---
 
@@ -108,7 +137,7 @@ The core itself registers a small number of routes outside the module namespace:
 
 | Extension | How |
 |---|---|
-| Custom path prefix | Override module name prefix via `module.json` `route_prefix` field |
-| Route middleware | Apply per-module middleware by wrapping the dispatcher |
-| OpenAPI generation | Walk the route table post-load and emit an OpenAPI 3 spec |
-| GraphQL | Register a single `/graphql` handler in the core that routes to a schema stitched from module-declared types |
+| Custom route prefix | Set `tables.{table}.route_prefix` in `api.yaml` |
+| Additional routes per table | Register extra handlers on the Echo group after `RegisterRoutes` returns |
+| OpenAPI generation | Walk the Echo route tree post-startup and emit an OpenAPI 3 spec |
+| Per-table middleware | Wrap specific handlers with additional Echo middleware before mounting |

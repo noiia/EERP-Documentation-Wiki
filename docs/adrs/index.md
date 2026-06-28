@@ -24,7 +24,8 @@ ADRs are **immutable** once accepted. If a decision is reversed or superseded, a
 | [ADR-001](001-custom-orm.md) | Custom ORM over GORM / ent | Accepted | 2024 |
 | [ADR-002](002-wasm-modules.md) | WebAssembly for module isolation | Accepted | 2024 |
 | [ADR-003](003-soft-delete.md) | Soft delete as the default delete strategy | Accepted | 2024 |
-| [ADR-004](004-csr-frontend.md) | CSR-only frontend (no SSR) | Accepted | 2024 |
+| [ADR-004](004-csr-frontend.md) | React frontend on a Next.js server with Zustand state | Accepted | 2024 (rev. 2026-06-16) |
+| [ADR-005](005-jwt-auth.md) | JWT authentication with stateful refresh tokens | Accepted | 2026-06-08 |
 
 ---
 

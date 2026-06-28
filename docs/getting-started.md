@@ -11,7 +11,7 @@ This guide walks you through running EERP locally and making your first change.
 | Go | 1.26 | Backend runtime |
 | Rust | stable + `wasm32-unknown-unknown` target | WASM module compilation |
 | Docker / Docker Compose | v2 | PostgreSQL dev database |
-| Node.js | 20+ | Frontend dev server |
+| Node.js | 20+ | Next.js front server (dev and prod runtime) |
 | Make | any | Developer task runner |
 
 Install the Rust WASM target once:
@@ -63,7 +63,7 @@ This target starts three processes in sequence:
 
 1. Database (Docker, if not already running)
 2. Backend (`go run ./cmd/app/...`)
-3. Frontend (`npm run dev` on `:5173`)
+3. Frontend (`npm run dev` — Next.js front server on `:3000`)
 
 ### Run only the backend
 

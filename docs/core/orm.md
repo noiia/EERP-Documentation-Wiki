@@ -95,9 +95,28 @@ func (Order) TableName() string { return "orders" } // (2)
 | `db:"col,pk"` | Primary key |
 | `db:"col,omitempty"` | Skip field when value is the zero value |
 | `db:"col,softdelete"` | Marks the soft-delete timestamp column |
+| `db:"col,index"` | Secondary index on the column (btree) |
+| `db:"col,index=hash"` | Secondary index with an explicit access method |
 | `db:"-"` | Exclude from all queries |
 
 If no `db` tag is present, the column name is the snake_case conversion of the field name.
+
+### Indexes
+
+Tag a column with `index` to have an index created during auto-migration. The optional `index=<method>` selects the PostgreSQL access method — valid methods are `btree` (default), `hash`, `gist`, `spgist`, `gin`, and `brin`. An unknown method **fails fast at startup** with a metadata error, so a typo never silently ships an unindexed column.
+
+```go
+type Session struct {
+    model.BaseModel
+    Token  string         `db:"token,index=hash"`  // exact-match lookups
+    UserID uuid.UUID      `db:"user_id,index"`     // foreign-key style lookups (btree)
+    Tags   map[string]any `db:"tags,index=gin"`    // jsonb / array containment
+}
+```
+
+Indexes are created as `idx_<table>_<column>` with `CREATE INDEX IF NOT EXISTS`, so migration is **idempotent**: adding an `index` tag to an existing column creates the index on the next startup without touching the data. Removing the tag does **not** drop the index — drop it manually if it is no longer wanted (the migration path is additive by design; see [Module System](module-system.md)).
+
+The WASM/JSON migration path exposes the same capability via an operation: set `"index": true` (optionally `"index_type"`) on an `add_column` op, or emit a standalone `{"type": "create_index", "table": "...", "column": "...", "index_type": "gin"}`. This keeps the Go-tag path and the WASM-ABI path at feature parity — a module declares an index the same way regardless of which loader path it uses.
 
 ### MetadataCache
 

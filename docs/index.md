@@ -44,7 +44,7 @@ graph TD
     end
 
     subgraph Frontend
-        FE[SvelteKit SPA]
+        FE[Next.js Front Server<br/>React + Zustand]
     end
 
     FE -->|REST / JSON| HTTP
@@ -70,7 +70,8 @@ graph TD
 | Module schema | Rust → WASM (Wasmtime) | Sandboxed schema declaration, language-agnostic migrate() ABI |
 | Module logic | Go (monolith) | Zero IPC overhead, full ORM access, single binary deploy |
 | Database | PostgreSQL 18 | Mature, feature-rich, excellent Go driver ecosystem |
-| Frontend | SvelteKit 5 + TypeScript | Minimal runtime, component-level reactivity, CSR-only |
+| Frontend | React + Next.js (App Router) + TypeScript | Largest ecosystem and talent pool; runs on a dedicated front server (BFF) |
+| Frontend state | Zustand | Selector-based subscriptions avoid React Context re-render cascades; ~1 KB |
 
 ---
 
@@ -83,6 +84,8 @@ graph TD
 | Work with the database | [ORM](core/orm.md) · [Database Layer](core/database.md) |
 | Build a module (WASM/Rust path) | [Creating a WASM Module](developer-guide/creating-a-module.md) |
 | Build a module (Go monolith path) | [Creating a Go Module](developer-guide/creating-a-go-module.md) |
+| Understand the frontend | [Frontend Overview](frontend/index.md) · [View Engine](frontend/view-engine.md) |
+| Add a frontend view to a module | [Creating a Frontend Module](developer-guide/creating-a-frontend-module.md) |
 | Add a new data entity | [Creating an Entity](developer-guide/creating-an-entity.md) |
 | Write tests | [Testing](developer-guide/testing.md) |
 | Understand a design decision | [ADRs](adrs/index.md) |
@@ -108,8 +111,13 @@ eerp/
 │       └── crm/             # CRM module — Go service (monolith business logic)
 │           └── internal/
 │               └── crm.go   # Contact entity + Service (Create/List/Update/Delete)
-├── core-front/              # SvelteKit frontend
-│   └── src/routes/          # Page routes
+├── core-front/              # Next.js front server (React + Zustand) — pnpm workspace
+│   ├── packages/core-front/ # @eerp/core-front engine (the frontend ABI):
+│   │   └── src/             #   api (ApiClient/BFF), views (descriptors, stores, renderers),
+│   │                        #   auth (permissions, guards), registry (FrontModule)
+│   └── apps/shell/          # Next.js App Router host service
+│       ├── app/             #   routes: layout, login, api/auth (BFF), [...module] catch-all
+│       └── src/             #   server session/ApiClient + generated module manifest (gitignored)
 ├── compose.yml              # PostgreSQL dev environment
 ├── eerp-config.json         # Runtime configuration (module_root, DB, pool)
 └── Makefile                 # Developer commands

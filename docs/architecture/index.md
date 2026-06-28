@@ -24,7 +24,7 @@ This split gives sandboxed schema ownership without the IPC cost of routing ever
 ```mermaid
 graph TB
     subgraph "Layer 2 — Frontend"
-        FE["SvelteKit SPA<br/>(CSR, TypeScript)"]
+        FE["Next.js Front Server<br/>(React + Zustand, BFF)"]
     end
 
     subgraph "Layer 1 — Core Runtime (Go)"
@@ -132,11 +132,13 @@ Each module's Go service:
 3. Implements business operations using the ORM's query builder and transaction API
 4. Will register HTTP handlers with the router once the handler dispatch layer is implemented
 
-### Frontend (SvelteKit)
+### Frontend (Next.js + Zustand)
 
-The frontend is a pure CSR SPA that communicates with the backend exclusively over HTTP/JSON. It has no knowledge of module internals — it only calls routes exposed by the core's HTTP server.
+The frontend is a **React application running on a dedicated Next.js front server**. The browser talks only to the Next.js server, which acts as a Backend-for-Frontend (BFF): it owns the `HttpOnly` session cookie, performs token refresh server-side, and proxies authenticated requests to the core's HTTP API. The Go core is never exposed directly to the browser. The front server has no knowledge of module internals — it only calls routes exposed by the core.
 
-The decision to avoid SSR is deliberate: EERP deployments may serve the frontend from a CDN entirely separate from the Go backend. See [ADR-004](../adrs/004-csr-frontend.md).
+Shared client state (current user, resolved permissions, active tenant, UI flags) lives in **Zustand** stores, whose selector-based subscriptions keep a data-dense ERP UI from suffering the re-render cascades that React Context causes.
+
+The earlier "no front-end server, static CDN" stance was deliberately reversed to give the frontend a server tier for session handling and server-side rendering. See [ADR-004](../adrs/004-csr-frontend.md).
 
 ---
 
@@ -242,7 +244,7 @@ The main objective is to finish the project with the following architecture.
 flowchart LR
     %% Frontend
     subgraph Frontend
-        Svelte["SvelteKit Frontend"]
+        Front["Next.js Front Server\n(React + Zustand)"]
     end
 
     %% Core ERP Go container
@@ -272,7 +274,7 @@ flowchart LR
     end
 
     %% Flows
-    Svelte -->|HTTP / REST| Core
+    Front -->|HTTP / REST| Core
     Core --> ORM
     ORM --> DB
     Core --> WASM_Manager
@@ -298,7 +300,7 @@ flowchart LR
 
     %% Frontend
     subgraph Frontend
-        Svelte["SvelteKit Frontend"]:::frontend
+        Front["Next.js Front Server\n(React + Zustand)"]:::frontend
     end
 
     %% Core Master
@@ -344,7 +346,7 @@ flowchart LR
     end
 
     %% Flows
-    Svelte -->|HTTP / REST| Master
+    Front -->|HTTP / REST| Master
     WASM_Repo -->|fetch/download| Master
 
     %% Job distribution via Redis

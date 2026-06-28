@@ -1,0 +1,11 @@
+{
+  "$comment": "Tracks the EERP `dev` commit this wiki was last synchronized against. To document new changes, diff EERP `dev` from `eerp_dev_commit` to its current HEAD (`git log <eerp_dev_commit>..dev`), update the affected pages, then bump this file to the new HEAD.",
+  "repository": "https://github.com/noiia/EERP.git",
+  "branch": "dev",
+  "eerp_dev_commit": "81b96d50130b846ab362c8f04029f7032b141798",
+  "eerp_dev_commit_short": "81b96d5",
+  "eerp_dev_commit_date": "2026-06-27T16:02:41+02:00",
+  "eerp_dev_commit_subject": "Merge pull request #34 from noiia/33-impcicd-improving-test-ci-pipelines-adding-building-ci",
+  "synced_at": "2026-06-28",
+  "notes": "First incremental-sync checkpoint. This sync added the Frontend section (@eerp/core-front engine, build-time module discovery, BFF auth) and ORM index-tag documentation, covering the core-front Next.js work merged onto dev between the previous wiki update (2026-06-07) and this commit."
+}
