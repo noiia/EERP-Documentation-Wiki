@@ -26,6 +26,11 @@ ADRs are **immutable** once accepted. If a decision is reversed or superseded, a
 | [ADR-003](003-soft-delete.md) | Soft delete as the default delete strategy | Accepted | 2024 |
 | [ADR-004](004-csr-frontend.md) | React frontend on a Next.js server with Zustand state | Accepted | 2024 (rev. 2026-06-16) |
 | [ADR-005](005-jwt-auth.md) | JWT authentication with stateful refresh tokens | Accepted | 2026-06-08 |
+| [ADR-006](006-view-inheritance.md) | Frontend view inheritance | Accepted | 2026-07-09 |
+| [ADR-007](007-runtime-view-fields.md) | Runtime-configurable view fields (Kanban/Calendar) | Accepted | 2026-07-09 |
+| [ADR-008](008-form-anatomy.md) | Default form anatomy — synthesized header, columns, notebook | Accepted | 2026-07-10 |
+| [ADR-009](009-module-lifecycle-api.md) | Module lifecycle managed via API | Superseded (Decision 1, by ADR-010) | 2026-07-10 |
+| [ADR-010](010-live-module-lifecycle.md) | Live module lifecycle — activate/deactivate/reload with no restart | Accepted | 2026-07-11 |
 
 ---
 

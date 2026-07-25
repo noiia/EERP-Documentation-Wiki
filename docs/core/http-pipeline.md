@@ -26,14 +26,24 @@ flowchart LR
     Request -->|1| RequestID["Request ID\n(inject trace ID)"]
     RequestID -->|2| Logger["Zap Access Logger\n(method, path, status, duration)"]
     Logger -->|3| Recover["Panic Recovery\n(500 + log stack trace)"]
-    Recover -->|4| CORS["CORS Headers"]
-    CORS -->|public routes| AuthHandler["Auth Handler\n(login / refresh / logout)"]
-    CORS -->|protected routes| JWT["JWT Middleware\n(validate token, inject Identity)"]
-    JWT -->|5| Permissions["Permission Middleware\n(derive + check permission)"]
-    Permissions -->|6| Handler["ORM-generated CRUD Handler"]
+    Recover -->|4| Body["Body Limit\n(default 1M)"]
+    Body -->|5| CORS["CORS\n(configurable allow-list)"]
+    CORS -->|public auth routes| RateLimit["Rate Limiter\n(per-IP, default 20/min)"]
+    RateLimit --> AuthHandler["Auth Handler\n(login / refresh / logout)"]
+    CORS -->|protected routes| JWT["JWT Middleware\n(validate token, inject Identity + tenant)"]
+    JWT -->|6| Permissions["Permission Middleware\n(derive + check permission, fail closed)"]
+    Permissions -->|7| Handler["ORM-generated CRUD Handler"]
 ```
 
-The first four middleware (RequestID, Logger, Recover, CORS) are applied globally to all routes. The JWT and Permission middleware are applied only to the protected group.
+The global middleware (RequestID, Logger, Recover, Body Limit, CORS) applies to all routes. The public auth group additionally has a **rate limiter**; the protected group additionally has the JWT and Permission middleware.
+
+| Middleware | Scope | Notes |
+|---|---|---|
+| Body Limit | global | Caps request bodies; default `1M`, set via `request_body_limit` |
+| CORS | global | Allow-list from `allowed_origins`; falls back to `*` only when unset (dev). Set it in production |
+| Rate Limiter | public auth group | Per client IP, default 20/min (`auth_rate_limit_per_minute`); returns `429` when exceeded |
+| JWT | protected group | Validates the Bearer token, injects `Identity` **and stamps the tenant** on the context |
+| Permission | protected group | Derives the required permission from the matched route pattern; **fails closed** (403) if it can't |
 
 ---
 
@@ -43,7 +53,7 @@ Routes are divided into two groups mounted under `/api/v1`:
 
 ### Public auth group
 
-Mounted at `/api/v1/auth` with **no authentication middleware**:
+Mounted at `/api/v1/auth` with **no authentication middleware**, but **rate-limited per client IP** (`ormserver.AuthRateLimiter`) to blunt credential brute-forcing:
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -53,7 +63,22 @@ Mounted at `/api/v1/auth` with **no authentication middleware**:
 
 ### Protected API group
 
-All other `/api/v1/*` routes are mounted with JWT middleware → Permission middleware applied as Echo group middleware. Every registered ORM table gets CRUD routes in this group — see [Automatic Router](router.md).
+All other `/api/v1/*` routes are mounted with JWT middleware → Permission middleware applied as Echo group middleware. Every registered ORM table gets CRUD routes in this group — see [Automatic Router](router.md). Tables excluded with `orm.WithExcluded()` (e.g. the auth tables) get **no** routes here.
+
+---
+
+## Rate Limiting
+
+The public auth group is protected by an in-memory, per-client-IP rate limiter (`ormserver.AuthRateLimiter`), built on Echo's `RateLimiter` middleware with a token-bucket memory store. It exists to blunt credential brute-forcing against `/api/v1/auth/login` (and the other auth endpoints).
+
+| Setting | Default | Config field |
+|---|---|---|
+| Requests per minute per IP | 20 | `auth_rate_limit_per_minute` |
+| Burst | = per-minute value | — |
+| Response when exceeded | `429 Too Many Requests` | — |
+
+!!! note "Per-process, in-memory"
+    The limiter state is per server instance. For a horizontally-scaled deployment — or for account-level lockout rather than per-IP — back it with a shared store (e.g. Redis). The client IP is taken from Echo's `RealIP()`, so a correct proxy/`X-Forwarded-For` configuration is required behind a load balancer.
 
 ---
 
@@ -106,7 +131,8 @@ All authentication and authorisation errors follow a uniform JSON envelope:
 | `code` value | HTTP status | Condition |
 |---|---|---|
 | `UNAUTHENTICATED` | 401 | Missing token, invalid signature, expired token |
-| `FORBIDDEN` | 403 | Valid identity but insufficient permissions |
+| `FORBIDDEN` | 403 | Valid identity but insufficient permissions, or an underivable permission (fail-closed) |
+| — | 429 | Auth rate limit exceeded (see [Rate Limiting](#rate-limiting)) |
 
 The `request_id` field is the value injected by the RequestID middleware, allowing correlation with access logs.
 
@@ -123,6 +149,7 @@ Each middleware enriches the Echo context passed down the chain:
 |---|---|---|
 | Request ID | RequestID middleware | UUID for this request (also set as `X-Request-ID` response header) |
 | Identity | JWT middleware | Authenticated `auth.Identity{UserID, TenantID, Roles}` |
+| Tenant | JWT middleware | The caller's tenant ID (`orm/access.WithTenant`), read by the CRUD layer for row-level isolation |
 
 Handlers retrieve the identity via typed accessors (see [Authentication](authentication.md#identity-in-context)):
 
@@ -156,7 +183,7 @@ See also: [Authentication](authentication.md), [Permissions](permissions.md), [A
 
 | Extension | How |
 |---|---|
-| Rate limiting | Add a rate-limit middleware before JWT in the protected group |
+| Rate limiting | Built-in per-IP limiter on the auth group (`ormserver.AuthRateLimiter`); swap the memory store for a shared one (Redis) to scale horizontally |
 | Custom middleware | Use `e.Use()` for global or `g.Use()` for group-scoped Echo middleware |
 | WebSocket support | Register a dedicated WS handler on a separate Echo group before the protected group |
 | Request tracing | Enrich the RequestID middleware to propagate W3C Trace Context headers |

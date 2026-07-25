@@ -203,6 +203,125 @@ err = orm.Transact(ctx, db, func(tx *orm.Tx) error {
 
 ---
 
+## Tenant Isolation
+
+EERP is multi-tenant: rows belong to a tenant, and a caller must never see or touch another tenant's rows. The **generic CRUD layer enforces this automatically** so that every auto-generated endpoint is safe by default.
+
+Any registered table that has a **`tenant_id` column** is treated as tenant-owned. For those tables the generic `crud.Repository` (the map-based repository behind the auto-generated HTTP handlers):
+
+- **Reads** (`FindAll` incl. its count, `FindByID`) add `WHERE tenant_id = $tenant`.
+- **Updates**, **soft/hard deletes** and **restore** add the same predicate, so a cross-tenant id affects zero rows → `404`.
+- **Create** forces `tenant_id` to the caller's tenant, ignoring any value in the request body.
+- **Update** treats `tenant_id` as **immutable** — a client cannot move a row into another tenant.
+
+The tenant comes from the request context, where the JWT middleware stamps it via `orm/access.WithTenant`. The repository reads it with `access.TenantFromContext`.
+
+!!! danger "Fail closed"
+    If a tenant-scoped table is accessed with **no tenant in the context**, the repository returns `crud.ErrTenantMissing` rather than running an unscoped, all-tenants query. A wiring or authentication gap can never silently widen access.
+
+Tables **without** a `tenant_id` column are global by design (for example the shared permission catalog). To make a business entity tenant-owned, simply add a `tenant_id` column to its struct — isolation then applies automatically, with no handler changes:
+
+```go
+type Contact struct {
+    model.BaseModel
+    TenantID uuid.UUID `db:"tenant_id"` // set server-side; makes the table tenant-scoped
+    Name     string    `db:"name"`
+}
+```
+
+!!! warning "Only the generic CRUD layer is auto-scoped"
+    The typed `Repository[T]` and the query builders below are **not** tenant-aware. Custom service code that uses them must apply `WHERE tenant_id = $1` from the identity context itself (see [Authentication → Multi-Tenancy](authentication.md#multi-tenancy)).
+
+`tenant_id` is treated as a server-generated field by request validation, so clients are never asked to supply it on create — it is injected from the token, exactly like `id` and the timestamps.
+
+---
+
+## API Exposure vs. Registration
+
+Registering a struct with the ORM does two independent things: it makes the schema **migrate** and, by default, mounts a full **HTTP CRUD surface** for it. These are decoupled:
+
+| Option | Effect |
+|---|---|
+| `orm.Register[T]()` | Registered, migrated, **and** exposed via generic CRUD |
+| `orm.Register[T](orm.WithExcluded())` | Registered and migrated, but **no HTTP routes** |
+| `orm.WithExcludeFields("col")` | Column removed from the API entirely (input and output) |
+| `orm.WithReadOnlyFields("col")` | Column stripped from write bodies |
+| `orm.WithTableName("existing_table")` | Registers under another module's table instead of deriving one from the struct name — see [Extending another module's table](#extending-another-modules-table) |
+
+`WithExcluded()` is the fail-closed way to keep a table off the API while still letting the ORM own its schema. The auth tables (`users`, `roles`, `permissions`, `refresh_tokens`) use it: they must not be listable or mutable through unaudited generic CRUD, but their schemas must still migrate. Internally, `registry.All()` (the HTTP surface) omits excluded tables while `registry.AllRegistered()` (the migration set) includes them.
+
+!!! note "Security controls belong in code, not `api.yaml`"
+    Exclusions can also be expressed in `api.yaml`, but that file loads at startup and only shapes the API surface — a missing or malformed file must never *widen* it. Security-load-bearing exclusions (hiding `password_hash`, withholding `refresh_tokens`) are therefore enforced in code via the options above, so the guarantee is fail-closed. `api.yaml` is reserved for cosmetic overrides (route prefixes, field renames), and a configured-but-broken file is a **fatal** startup error.
+
+### Extending Another Module's Table
+
+`orm.WithTableName("existing_table")` lets one module register its **own** struct under a table another module already owns — the mechanism behind [module isolation without patching](../adrs/006-view-inheritance.md#context). A module embeds the base module's struct, adds its own fields, and re-registers:
+
+```go
+// core/modules/crminheritdemo/module.go
+type CRM struct {
+    crm.CRM                    // embed the base module's struct
+    Date    *time.Time `db:"date"`
+    Comment *string    `db:"comment"`
+}
+
+func (m *crminheritdemoModule) Register() error {
+    return orm.Register[CRM](orm.WithTableName("crm"))
+}
+```
+
+The `crm` table gains `date`/`comment` columns and they appear on the generic CRUD surface for `/api/v1/crm` — without a single line of `core/modules/crm` changing.
+
+!!! danger "Extension columns must be nullable"
+    An extension field **must** be a pointer type (`*time.Time`, `*string`, …), never a bare value type. A non-pointer field migrates as `NOT NULL`, which makes the extension column mandatory on **every** create against the base table — including from the base module's own form, which has no idea the extension exists. This shipped as a real bug once (a non-pointer `Comment string` 422'd every plain `crm` write) and is now pinned by a regression test asserting every column an extension adds reports `Nullable: true`. The WASM/JSON schema-extension path (`orm.ExtendSchema`) carries the identical rule.
+
+For registration ordering (why the base module must load first) and the frontend's mirror of this same "extend, don't patch" pattern, see [ADR-006: Frontend View Inheritance](../adrs/006-view-inheritance.md).
+
+---
+
+## Relations
+
+A `relation` field on the frontend descriptor (many-to-one, one-to-many, many-to-many — see [View Engine → Descriptors](../frontend/view-engine.md#descriptors)) has **no special representation in the ORM**. Each kind maps to an ordinary registered entity:
+
+| Kind | Go shape | Example |
+|---|---|---|
+| many-to-one (m2o) | A nullable FK column on the owning struct | `ContactID *uuid.UUID `db:"contact_id"`` on `Crm` |
+| one-to-many (o2m) | The inverse side of an m2o — no extra column, just a query scoped by the FK | Every `Crm` row where `contact_id = <this contact>` |
+| many-to-many (m2m) | A plain **junction entity**, registered like any other table | `CrmTag{ CrmID uuid.UUID, TagID uuid.UUID }` → `crm_tag` |
+
+```go
+// core/modules/crm/internal/tags.go
+type Tag struct {
+    model.BaseModel
+    TenantID uuid.UUID `db:"tenant_id"`
+    Name     string    `db:"name"`
+}
+
+type CrmTag struct {   // junction row — <own>_id / <related>_id by convention
+    model.BaseModel
+    TenantID uuid.UUID `db:"tenant_id"`
+    CrmID    uuid.UUID `db:"crm_id,index"`
+    TagID    uuid.UUID `db:"tag_id"`
+}
+```
+
+Both are registered with plain `orm.Register[T]()` and get their own full generic CRUD surface (`/api/v1/tag`, `/api/v1/crm_tag`). There is **no dedicated m2m handler** — the frontend's tags widget reads links with `GET /api/v1/crm_tag?filter[crm_id]=<id>` and writes/removes them as ordinary rows through the same generic routes. This is a deliberate consequence of the ORM having no relation concept to special-case: a junction table is exactly as auto-generated, tenant-isolated, and soft-deletable as any other entity.
+
+---
+
+## Query Parameters (Generic CRUD)
+
+The generic CRUD list endpoint (`GET /api/v1/{table}`) accepts bracketed query parameters in addition to `page`/`page_size`:
+
+| Parameter | Matching | Example |
+|---|---|---|
+| `filter[<column>]=<value>` | Exact match (`column::text = $1`) | `?filter[status]=won` |
+| `search[<column>]=<text>` | Case-insensitive containment (`column::text ILIKE '%'\|\|$1\|\|'%'`) | `?search[name]=mart` |
+
+Both are validated against the table's registered columns before touching SQL — an unknown column is a `400` (`"unknown filter column: …"`), not a silently-ignored parameter or an injection risk, since only known-safe identifiers are ever interpolated. There are no range/comparison operators (no `gt`/`lt`) — only exact match and substring search exist today. `filter[col]` is what the frontend uses to scope relation reads (an o2m's inverse list, an m2m's junction rows); `search[col]` backs the m2o relation widget's autocomplete. See [View Engine → Relation widgets](../frontend/view-engine.md#field-widgets) for the client side.
+
+---
+
 ## Query Builders
 
 When `Repository` methods are not expressive enough, drop down to the builder API. Builders are **immutable value types** — safe to branch and reuse.

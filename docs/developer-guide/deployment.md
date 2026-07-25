@@ -96,6 +96,22 @@ chown eerp:eerp /etc/eerp/eerp-config.json
 chmod 600 /etc/eerp/eerp-config.json
 ```
 
+### Object storage (optional)
+
+Add the five `s3_*` fields to enable picture/signature fields (see [Object Storage](../core/object-storage.md)):
+
+```json
+{
+    "s3_endpoint": "https://s3.your-provider.example",
+    "s3_region": "us-east-1",
+    "s3_bucket": "eerp-prod",
+    "s3_access_key": "GENERATE_A_SCOPED_KEY",
+    "s3_secret_key": "GENERATE_A_SCOPED_SECRET"
+}
+```
+
+Any S3-compatible store works — a managed bucket (AWS S3, MinIO, Backblaze B2) or a self-hosted [Garage](https://garagehq.deuxfleurs.fr/) cluster, the same software used for local dev. Omitting all five fields is a valid production configuration; the `/api/v1/pictures` routes simply don't mount.
+
 ---
 
 ## Running the Server

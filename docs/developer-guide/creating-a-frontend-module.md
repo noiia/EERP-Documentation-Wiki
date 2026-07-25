@@ -108,6 +108,21 @@ What you did **not** write: no data fetching (the server loader does it, cached 
 
 Need a view type that doesn't exist yet? That is one store factory + one renderer + one server loader path in `@eerp/core-front` — added once, available to every entity.
 
+Every `tree` view also gets a **display-mode** switcher (`List | Kanban | Calendar | Graph`) for free — no descriptor changes required. Which field backs Kanban's columns or Calendar's dates is a workspace admin setting made later from Settings → Views, not something a module declares. See [View Engine → Runtime view settings](../frontend/view-engine.md#runtime-view-settings-kanbancalendar).
+
+---
+
+## Beyond `text` fields
+
+The worked example above only uses `type: 'text'`. Real entities also reach for:
+
+- **`selection`** — a closed dropdown of options (`selection: { options: [...] }`), for a status-like field.
+- **`relation`** — a many-to-one, one-to-many, or many-to-many link to another entity, rendered as a search box, an embedded list, or a tag picker respectively.
+- **`widget`** — an explicit rendering variant for a type (e.g. `widget: 'long'` for a textarea, `widget: 'picture'`/`'signature'` for image/S3-backed fields, `widget: 'percent'`/`'stars'` for numbers).
+- **`compute`** / **`on_change`** — a *name* referencing a handler the module registers separately (`registerFieldFunction`/`registerOnChange`), never a function on the descriptor itself.
+
+See [View Engine → Field Widgets](../frontend/view-engine.md#field-widgets), [→ Computed & Reactive Fields](../frontend/view-engine.md#computed-reactive-fields), and [→ Relation Widgets](../frontend/view-engine.md#relation-widgets) for the full contract and examples. A form with no declared `layout` also gets a synthesized header/columns/notebook anatomy for free — see [View Engine → Layout](../frontend/view-engine.md#layout-the-default-form-anatomy).
+
 ---
 
 ## 5. Guard with permissions

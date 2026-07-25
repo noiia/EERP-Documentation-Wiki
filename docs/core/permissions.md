@@ -11,10 +11,11 @@ See [Authentication](authentication.md) for how identities are established and [
 ## Responsibilities
 
 - Define the permission model (roles, resources, actions)
-- Derive the required permission automatically from the route shape
-- Check permissions before executing handlers
+- Derive the required permission automatically from the matched route pattern
+- Check permissions before executing handlers, **failing closed** when the requirement can't be determined
 - Cache permission lookups to avoid per-request DB queries
-- Enforce tenant isolation (no cross-tenant access)
+
+Row-level tenant isolation is a separate concern handled by the [ORM's CRUD layer](orm.md#tenant-isolation), not by this middleware.
 
 ---
 
@@ -58,15 +59,21 @@ The middleware evaluates the exact code first, then all applicable wildcard patt
 
 ## Automatic Route-to-Permission Derivation
 
-Permissions are **not** declared per-route in code. The permission middleware derives the required permission automatically from the URL path and HTTP method.
+Permissions are **not** declared per-route in code. The permission middleware derives the required permission from the **matched route pattern** (Echo's `c.Path()`, e.g. `/api/v1/crm/contacts/:id`) and the HTTP method.
+
+Deriving from the route *pattern* rather than the raw URL is deliberate: path parameters such as `:id` are excluded, so the **collection route and the item route for the same table resolve to the same permission**. The resource is taken from the static path segments *before the first path parameter*; anything at or after `:id` — the id value itself, and action suffixes like `restore` — never leaks into the resource. The HTTP method carries the action.
 
 ### Path rules
 
-| Route shape | Example path | Derived permission |
+| Route pattern | Example | Derived permission |
 |---|---|---|
-| Two segments after `/api/v1/` | `GET /api/v1/crm/contacts` | `crm:contacts:read` |
-| One segment after `/api/v1/` | `GET /api/v1/crm` | `crm:crm:read` |
-| Unknown path shape or empty | — | `""` — middleware passes through |
+| Flat collection | `GET /api/v1/crm` | `crm:crm:read` |
+| Flat item | `GET /api/v1/crm/:id` | `crm:crm:read` |
+| Module + resource collection | `GET /api/v1/crm/contacts` | `crm:contacts:read` |
+| Module + resource item | `DELETE /api/v1/crm/contacts/:id` | `crm:contacts:delete` |
+| Restore (soft-delete tables) | `POST /api/v1/crm/contacts/:id/restore` | `crm:contacts:write` |
+
+Because item and collection routes derive identically, a grant like `crm:contacts:read` covers **both** listing and reading a single record — a wildcard is no longer needed just to reach the `:id` route.
 
 ### HTTP method mapping
 
@@ -74,12 +81,16 @@ Permissions are **not** declared per-route in code. The permission middleware de
 |---|---|
 | `GET` | `read` |
 | `POST` | `write` |
-| `PUT` | `write` |
-| `PATCH` | `write` |
+| `PUT` / `PATCH` | `write` |
 | `DELETE` | `delete` |
-| Unknown | `""` — middleware passes through |
+| Any other (`HEAD`, `OPTIONS`, …) | `""` |
 
-When the derived permission is `""` (unknown method or unrecognised path), the middleware does not block the request. This ensures that routes outside the standard CRUD shape are not accidentally denied.
+### Fail-closed
+
+If the required permission cannot be determined — an unknown method, or a route with no static resource segment — the derived string is `""` and the middleware **denies the request with `403 FORBIDDEN`**. It never passes an undetermined request through. Every generic CRUD route yields a permission, so an empty result signals an unexpected shape and must not bypass authorization.
+
+!!! warning "This behaviour changed"
+    Earlier versions passed a request through when the permission could not be derived (fail-open) and derived the resource from the raw URL, so `/api/v1/crm/<uuid>` produced `crm:<uuid>:read` — a different permission from the collection route. Both are fixed: derivation now uses the route pattern and an undeterminable permission is denied.
 
 ---
 
@@ -88,10 +99,10 @@ When the derived permission is `""` (unknown method or unrecognised path), the m
 ```mermaid
 flowchart TD
     A["Request arrives (JWT already validated)"] --> B["JWT middleware: extract Identity\n(roles from token, injected into context)"]
-    B --> C["Permission middleware: derive required permission\nfrom HTTP method + URL path"]
-    C --> D{Permission string empty?}
-    D -- Yes --> E["Pass through — unknown route shape"]
-    D -- No --> F["PermissionRepository.Has(roles, permission)"]
+    B --> C["Permission middleware: derive required permission\nfrom HTTP method + matched route pattern"]
+    C --> D{Permission derivable?}
+    D -- No --> E["403 FORBIDDEN (fail closed)"]
+    D -- Yes --> F["PermissionRepository.Has(roles, permission)"]
     F --> G{Cached result?}
     G -- Yes --> H{Allowed?}
     G -- No --> I["DB query: permissions JOIN role_permissions\nJOIN roles WHERE name IN roles"]
@@ -171,10 +182,12 @@ Permissions are created by inserting rows into the `permissions` table directly 
 
 Tenant isolation is enforced at two levels:
 
-1. **Token level**: The JWT contains `tenant_id`. All permission checks use role names scoped to that tenant.
-2. **Query level**: Every service filters by `tenant_id` from the identity context.
+1. **Token level**: the JWT carries `tenant_id`; the JWT middleware stamps it onto the request context.
+2. **Row level**: the generic CRUD layer automatically scopes every read and write on any table with a `tenant_id` column to the caller's tenant — see [ORM → Tenant isolation](orm.md#tenant-isolation). Hand-written services that drop to the query builder are **not** auto-scoped and must add `WHERE tenant_id = $1` themselves.
 
-A user from tenant A cannot access tenant B's data even if they somehow obtain a valid token for tenant A, because every query includes `WHERE tenant_id = $1` with the value from their token.
+A user authenticated in tenant A cannot read or mutate tenant B's rows through the generic API: id-based routes add `tenant_id = $tenant` to the `WHERE` clause, so a cross-tenant id simply returns `404`.
+
+Permissions and tenancy are orthogonal: permissions decide *what actions* a role may perform; tenant scoping decides *which rows* those actions can touch. A caller needs both — the permission grant **and** the row's `tenant_id` matching their token.
 
 ---
 

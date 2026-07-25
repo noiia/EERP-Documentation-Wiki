@@ -97,11 +97,16 @@ nav:
       - Authentication: core/authentication.md
       - Permissions: core/permissions.md
       - Error Handling: core/error-handling.md
+      - Object Storage: core/object-storage.md
   - Frontend:
       - Overview: frontend/index.md
       - "View Engine (@eerp/core-front)": frontend/view-engine.md
       - Module Discovery: frontend/module-discovery.md
       - "Authentication (BFF)": frontend/authentication.md
+  - Development:
+      - Overview: development/index.md
+      - Developing a Module: development/developing-a-module.md
+      - Server Integration: development/server-integration.md
   - Developer Guide:
       - "Creating a Module (WASM/Rust)": developer-guide/creating-a-module.md
       - "Creating a Module (Go monolith)": developer-guide/creating-a-go-module.md
@@ -116,3 +121,8 @@ nav:
       - "ADR-003: Soft Delete by Default": adrs/003-soft-delete.md
       - "ADR-004: React Frontend (Next.js + Zustand)": adrs/004-csr-frontend.md
       - "ADR-005: JWT Authentication with Stateful Refresh Tokens": adrs/005-jwt-auth.md
+      - "ADR-006: Frontend View Inheritance": adrs/006-view-inheritance.md
+      - "ADR-007: Runtime-Configurable View Fields": adrs/007-runtime-view-fields.md
+      - "ADR-008: Default Form Anatomy": adrs/008-form-anatomy.md
+      - "ADR-009: Module Lifecycle via API": adrs/009-module-lifecycle-api.md
+      - "ADR-010: Live Module Lifecycle": adrs/010-live-module-lifecycle.md

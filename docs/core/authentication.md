@@ -53,6 +53,12 @@ sequenceDiagram
 !!! important "Refresh token transport"
     The refresh token is **never returned in the response body**. It is delivered exclusively as an `HttpOnly; Secure; SameSite=Strict` cookie named `refresh_token`. This prevents JavaScript access and CSRF abuse.
 
+!!! note "Constant-time login"
+    When the email is unknown, the handler still runs a full bcrypt comparison against a **real** dummy hash generated once at startup at `bcrypt.DefaultCost` (the same cost as stored passwords). This equalises response time between "no such user" and "wrong password", so timing cannot be used to enumerate valid accounts. (An earlier placeholder string was not a valid hash and returned instantly, leaving the side-channel open.)
+
+!!! tip "Brute-force protection"
+    The public `/api/v1/auth/*` endpoints are rate-limited per client IP (default 20 requests/min, configurable via `auth_rate_limit_per_minute`). Exceeding the limit returns `429 Too Many Requests`. See [HTTP Pipeline](http-pipeline.md#rate-limiting).
+
 ### Login Response Body
 
 ```json
@@ -179,6 +185,9 @@ sequenceDiagram
 
 Refresh tokens are stored as **bcrypt hashes** in the `refresh_tokens` table. The raw token is never persisted; a database breach does not expose live tokens.
 
+!!! note "Atomic rotation"
+    Rotation revokes the previous tokens and inserts the new one inside a **single transaction** (`orm.Transact`). A failure part-way can never leave a user with every token revoked and no replacement, which would strand their session.
+
 ---
 
 ## Logout
@@ -187,9 +196,37 @@ Refresh tokens are stored as **bcrypt hashes** in the `refresh_tokens` table. Th
 
 ---
 
+## User & Role Administration
+
+Accounts and roles are managed through dedicated, audited endpoints — never through the generic CRUD surface (see [ORM → API exposure](orm.md#api-exposure-vs-registration) for why `users`/`roles` are `WithExcluded()`).
+
+| Method | Route | Permission |
+|---|---|---|
+| `GET` | `/api/v1/users` | `users:users:read` |
+| `POST` | `/api/v1/users` | `users:users:write` |
+| `GET` | `/api/v1/users/:id` | `users:users:read` |
+| `PUT` | `/api/v1/users/:id` | `users:users:write` |
+| `GET` | `/api/v1/roles` | `roles:roles:read` |
+| `POST` | `/api/v1/roles` | `roles:roles:write` |
+| `GET` | `/api/v1/roles/:id` | `roles:roles:read` |
+| `PUT` | `/api/v1/roles/:id` | `roles:roles:write` |
+
+Permissions follow the same route-derived `module:resource:action` convention as every other handler — see [Permissions](permissions.md).
+
+- **Creating a user** (`POST /api/v1/users {email}`) starts the account **locked**: no `password_hash` is set, so login is impossible until a separate credential-setting flow runs. Only `email` is writable via `PUT`. `password_hash` is never present in any request or response body.
+- **Creating a role** (`POST /api/v1/roles {name, description}`) starts with **no grants** — permissions are assigned through their own flow, not at creation time.
+- List responses use the same `{ data, total }` envelope as generic CRUD, so the frontend's `ApiClient` (see [View Engine](../frontend/view-engine.md)) consumes both uniformly.
+- There is deliberately no `DELETE` yet, and no permission-grant endpoint — both are left to their own purpose-built, audited flows rather than being folded into this API.
+
+---
+
 ## Multi-Tenancy
 
-Every entity that belongs to a tenant has a `tenant_id` column. The authentication middleware injects the tenant ID from the token; services filter by it. The ORM provides no automatic tenant filter — services are responsible for applying `WHERE tenant_id = $1` with the value from the identity context.
+Every entity that belongs to a tenant has a `tenant_id` column. The JWT middleware reads the `tenant` claim from the token and stamps it onto the request context (`orm/access.WithTenant`).
+
+The **generic CRUD layer isolates tenant-owned tables automatically**: any registered table with a `tenant_id` column has every read and write scoped to the caller's tenant, `tenant_id` is forced server-side on create and is immutable on update, and a missing tenant fails closed rather than running unscoped. See [ORM → Tenant isolation](orm.md#tenant-isolation) for the full contract.
+
+Code that bypasses the generic layer and drops to the query builder (the `ListContacts` example above) is **not** auto-scoped and must apply `WHERE tenant_id = $1` from the identity context itself.
 
 ---
 
@@ -213,6 +250,9 @@ type RefreshTokens struct {
     Revoked   bool      `db:"revoked"`
 }
 ```
+
+!!! warning "Auth tables are not exposed via generic CRUD"
+    `users`, `roles`, `permissions` and `refresh_tokens` are registered with the ORM (so their schemas migrate and the typed repos work) but are **excluded from the generic HTTP CRUD surface** with `orm.WithExcluded()`. Auto-generated CRUD on them would be a privilege-escalation and cross-tenant integrity risk (mutating the global permission catalog, creating password-less users, listing token hashes). Account, role and permission management must go through dedicated, audited endpoints. `password_hash` is additionally excluded from all API input and output. See [ORM → API exposure](orm.md#api-exposure-vs-registration).
 
 ---
 

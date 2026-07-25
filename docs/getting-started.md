@@ -10,7 +10,7 @@ This guide walks you through running EERP locally and making your first change.
 |---|---|---|
 | Go | 1.26 | Backend runtime |
 | Rust | stable + `wasm32-unknown-unknown` target | WASM module compilation |
-| Docker / Docker Compose | v2 | PostgreSQL dev database |
+| Docker / Docker Compose | v2 | PostgreSQL dev database + Garage (object storage) |
 | Node.js | 20+ | Next.js front server (dev and prod runtime) |
 | Make | any | Developer task runner |
 
@@ -50,6 +50,18 @@ This starts PostgreSQL 18 on `localhost:5432` with:
 - Database: `poc`
 - User: `postgres`
 - Password: `postgres`
+
+---
+
+## Object Storage (optional)
+
+Picture and signature fields need S3-compatible object storage. Locally this is [Garage](https://garagehq.deuxfleurs.fr/), started as part of `docker compose up -d` and bootstrapped once with:
+
+```bash
+make garage-init
+```
+
+Skip this if you don't need picture/signature widgets — everything else runs without it. See [Object Storage](core/object-storage.md) for the full config reference.
 
 ---
 
@@ -119,6 +131,12 @@ sequenceDiagram
     end
     Main->>Main: Start HTTP server
 ```
+
+---
+
+## Seeding Demo Data
+
+Settings → Developer (`/settings/developer`) has a "Seed demo data" button that creates a batch of fake contacts, CRM records, and tags through the ordinary generic entity API — useful for quickly populating a local workspace to click around in. It's a **development-only** tool: the button is disabled outside dev, and the underlying Server Action independently refuses to run when `NODE_ENV=production`, so it can't be reached against a real tenant by any path.
 
 ---
 

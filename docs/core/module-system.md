@@ -17,7 +17,10 @@ EERP uses a **hybrid module model** with two distinct components per module:
 
 The WASM boundary is crossed once per module per startup — not on each request. This gives sandboxed schema ownership without any per-request serialization cost.
 
-> **Current state**: the CRM module ships as a pure Go service (`core/modules/crm/`). The Wasmtime loader is live; `.wasm` binaries are the next step for full schema decoupling.
+> **Current state**: every shipped module is a pure Go service — the Wasmtime loader is live, but `.wasm` binaries are still the next step for full schema decoupling. `core/modules/` currently ships `crm` and `contact` (business entities), `appstore` (the module-management UI, see [Live Activation](#live-activation-no-restart)), `crminheritdemo` (a worked example of [extending another module's table](orm.md#extending-another-modules-table)), and three infrastructure-only modules with no `module.json` of their own — `auth`, `settings`, and `pictures`/`notebook` (record-anchored services, see [Object Storage](object-storage.md)) — all registered with the ORM but excluded from generic CRUD.
+
+!!! note "How a Go module gets wired in"
+    `core/modules/all` is a small `//go:build !wasip1` package that blank-imports every other Go module so each one's `init()` fires and self-registers via `module.RegisterGoModule`. It is the one file that changes when a new Go-only module is added to the tree — everything else (discovery, dependency ordering, HTTP wiring) proceeds from that registration exactly as it does for a WASM module.
 
 ---
 
@@ -84,6 +87,9 @@ modules/crm/
 | `priority` | int | Manual priority hint (rarely needed; dependency resolver assigns priorities) |
 | `is_service` | bool | Whether the module registers HTTP handlers |
 | `auto_install` | bool | Whether to apply migrations automatically on load |
+| `app_mode` | bool | Whether the module gets a navigable tile in the frontend landing menu (see below) |
+
+`app_mode` is deliberately **not** a field on the Go `types.Module` struct — the App Store's management API round-trips `module.json` as a raw map precisely so keys like this one (display-only, frontend-consumed) survive untouched without every one needing a matching Go field. The frontend's build-time discovery reads `app_mode === true` straight off each module's JSON to decide whether it appears as an app tile; a module without one (or without a `module.json` at all — the infrastructure-only modules above) is simply never offered as an app to open. See [ADR-009: Module Lifecycle via API](../adrs/009-module-lifecycle-api.md#4-app_mode-stopped-being-writable) for why it's readable but not writable through that API.
 
 ---
 
@@ -301,9 +307,41 @@ graph LR
 |---|---|
 | New operation type | Add case to `Operation.Type` handler in `load.go` |
 | New WASM export | Export function from Rust, call from `load.go` |
-| Hot reload | Future: watch `module_root` with `fsnotify`, re-instantiate on change |
-| Module isolation | Future: per-module Wasmtime store with resource limits |
+| Hot reload | **Shipped** — see [Live Activation](#live-activation-no-restart) below |
+| Module isolation | Per-module Wasmtime `Store` (shipped, see below); resource limits remain future work |
 | Module API | Future: Go functions linked into WASM linker, called from Rust via imports |
+
+---
+
+## Live Activation (no restart)
+
+`active: false` in `module.json` no longer means "skip loading" — it means "load, but gate access." `Registry.Boot` (`core/internal/module/runtime.go`) loads **every** discovered module at startup regardless of `active`, and tracks each one's flag in an in-memory map. `ActiveGateMiddleware` checks that map on every generic-CRUD request and returns `403 MODULE_INACTIVE` for a deactivated module's table; the route itself stays mounted for the process's life, since the router has no safe way to add or remove a route while serving traffic.
+
+```mermaid
+sequenceDiagram
+    participant Admin as App Store UI
+    participant API as PUT /api/v1/modules/:id
+    participant Reg as Registry (in-memory)
+    participant FS as module.json
+    participant MW as ActiveGateMiddleware
+
+    Admin->>API: { active: false }
+    API->>Reg: SetActive(name, false)
+    Reg->>FS: persist (atomic write, after the gate flips)
+    Note over Reg,MW: Next request onward
+    MW->>Reg: IsTableActive(table)?
+    Reg-->>MW: false
+    MW-->>Admin: 403 MODULE_INACTIVE
+```
+
+Consequences worth knowing when working in this area:
+
+- A deactivated module's table still exists and is still migrated at boot — "deactivated" means inaccessible via the generic CRUD surface, not unloaded. Data written before deactivation reappears the moment the module is reactivated.
+- Table ownership (which module's flag gates which table) is **attributed, not declared**: the first module whose migration creates a table is recorded as its owner. A module that only adds columns to another module's table (`ExtendSchema`/`orm.WithTableName` inheritance) never claims ownership of it — deactivating it has no effect on the table it extends.
+- `POST /api/v1/modules/:id/reload` re-reads a WASM module's `.wasm` file from disk into a fresh Wasmtime `Store` and re-runs its migration — a real hot-swap. For a Go module (statically compiled into the backend binary) there is nothing to hot-swap; `Reload` re-validates schema registration as a no-op and says so in the log, rather than pretending a reload occurred.
+- This only reaches modules already known at the **last build** — a module folder that didn't exist at that build has no mounted route at all yet, on either side. Truly unseen-code hot-install remains deferred, larger infrastructure.
+
+The management API this backs (`PUT /api/v1/modules/:id`, the App Store UI) and the reasoning behind each constraint are recorded in [ADR-009: Module Lifecycle via API](../adrs/009-module-lifecycle-api.md) and [ADR-010: Live Module Lifecycle](../adrs/010-live-module-lifecycle.md).
 
 ---
 
@@ -316,3 +354,10 @@ WASM modules run inside a Wasmtime sandbox. They cannot:
 - Crash the Go process on panic
 
 They can only communicate with the core through the defined ABI (exported functions + linear memory) and through imported host functions that the core explicitly exposes via the Wasmtime linker.
+
+---
+
+## Related
+
+- [Module Discovery (frontend)](../frontend/module-discovery.md) — the build-time mirror of this loader on the Next.js side.
+- [ADR-009: Module Lifecycle via API](../adrs/009-module-lifecycle-api.md) · [ADR-010: Live Module Lifecycle](../adrs/010-live-module-lifecycle.md) — the App Store management API and the live activate/deactivate/reload design.

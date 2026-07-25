@@ -80,6 +80,16 @@ EERP is a self-contained framework without an external identity provider. Symmet
 
 ---
 
+## Subsequent Hardening
+
+The original decision stands; the following refinements were made afterwards and are noted here to keep the record current:
+
+- **Atomic refresh rotation.** The revoke-old + store-new writes described under *Consequences* now run inside a single transaction (`orm.Transact`), so a partial failure can never leave a user with every token revoked and no replacement.
+- **Constant-time login.** The unknown-user branch runs a real bcrypt comparison against a dummy hash generated at `bcrypt.DefaultCost`, so login timing no longer reveals whether an email exists.
+- **Rate-limited auth endpoints.** `/api/v1/auth/*` is rate-limited per client IP to blunt brute-forcing (`auth_rate_limit_per_minute`).
+- **Tenant isolation moved into the framework.** Row-level tenant scoping is now enforced automatically by the generic CRUD layer for any table with a `tenant_id` column (fail-closed), rather than relying on each service to filter. See [ORM → Tenant isolation](../core/orm.md#tenant-isolation).
+- **Auth tables are not exposed via generic CRUD.** `users`, `roles`, `permissions` and `refresh_tokens` are registered for migration but excluded from the HTTP surface (`orm.WithExcluded()`).
+
 ## Related
 
 - [Authentication](../core/authentication.md) — implementation details
