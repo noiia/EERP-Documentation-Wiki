@@ -1,0 +1,67 @@
+# Form View
+
+`viewType: 'form'` — a single-record editor. Fields render via MUI inputs bound to a Zustand
+`draft`; **Save** commits via the entity's Server Action and is disabled until the draft is dirty.
+
+---
+
+## The default anatomy — you don't have to lay anything out
+
+Declare no `layout` and the engine synthesizes one: a header row (the first `widget: 'picture'`
+field, then the first text field rendered large as a title), a two-column group holding every
+other field, and a "Settings" notebook tab collecting every `widget: 'long'` field. See
+[ADR-008: Default Form Anatomy](../../adrs/008-form-anatomy.md) and [View Engine →
+Layout](../view-engine.md#layout-the-default-form-anatomy) for the full mechanism.
+
+```ts
+const formView: ViewDescriptor = {
+  entity: 'crm',
+  viewType: 'form',
+  fields: [
+    { name: 'name', label: 'Name', type: 'text', required: true },
+    { name: 'email', label: 'Email', type: 'text' },
+    { name: 'notes', label: 'Notes', type: 'text', widget: 'long' }, // lands in the Settings tab
+  ],
+  permissions: ['crm:contacts:read'],
+}
+```
+
+## Always-present chrome
+
+Every form route gets, unconditionally:
+
+- The [form actions menu](form-chrome.md) (kebab icon, top-right) — disabled if `actions` is empty.
+- Save and Reset, immediately to the actions menu's left.
+- A [chatter panel](chatter-panel.md), if `showChatter: true`.
+- A [status bar](form-chrome.md#status-bar), if `statusBar` names a `selection` field.
+- [Header buttons](form-chrome.md#header-buttons), if `headerButtons` is declared.
+
+None of these require a custom component — they're descriptor fields the engine renders
+unconditionally. See [ADR-012: Form Actions Menu](../../adrs/012-form-actions-menu.md) for why the
+form's own page title was dropped in favor of this chrome.
+
+## An explicit layout
+
+Declaring `layout` opts out of the synthesized anatomy entirely — you get exactly what you
+declare, using the same node types the synthesized layout is built from:
+
+```ts
+const layout: LayoutNode = {
+  kind: 'group',
+  children: [
+    { kind: 'row', children: [{ kind: 'field', name: 'name' }, { kind: 'field', name: 'email' }] },
+    { kind: 'notebook', pages: [{ id: 'settings', label: 'Settings', children: [{ kind: 'field', name: 'notes' }] }] },
+  ],
+}
+```
+
+`LayoutNode` kinds: `group`, `row`, `section`, `notebook`, `page` (a notebook tab), and `field`
+leaves. The synthesized header/columns nodes carry stable ids (`__form_header`,
+`__form_columns`) so a [view extension](../view-engine.md#view-inheritance-extends) can address
+and reshape them even when a base module never declared an explicit layout.
+
+## Related
+
+- [View Engine → Layout](../view-engine.md#layout-the-default-form-anatomy) · [→ View inheritance](../view-engine.md#view-inheritance-extends)
+- [Form Chrome](form-chrome.md) · [Chatter Panel](chatter-panel.md)
+- [ADR-008: Default Form Anatomy](../../adrs/008-form-anatomy.md)

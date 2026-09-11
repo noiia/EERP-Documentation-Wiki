@@ -3,10 +3,17 @@
 !!! info "Two paths available"
     EERP supports two module implementation strategies:
 
-    - **Go monolith** (this guide) — schema declared in Go, all logic compiled directly into the core binary. This is the current approach for all shipped modules (CRM, etc.).
-    - **WASM / Rust** ([Creating a WASM Module](creating-a-module.md)) — Rust crate compiles to `.wasm`; the core calls `migrate()` at startup for sandboxed schema declaration.
+    - **Go monolith** (this guide) — schema derived automatically by the ORM, all logic compiled directly into the core binary. This is the path every shipped module uses (CRM, contact, sale, propertymanagement, warehouse, cron, …).
+    - **WASM / WASI** ([Creating a WASM/WASI Module](creating-a-module.md)) — the module's own Go source is cross-compiled to WASI; the core calls `migrate()` at startup for sandboxed schema declaration. Implemented and functional, but currently unused by any shipped module — reach for it only when you need schema isolation without a core rebuild.
 
-This guide walks you through building a Go module from scratch. We'll build a `hr` (Human Resources) module as a running example, mirroring the pattern used by the CRM module (`core/modules/crm/internal/crm.go`).
+This guide walks you through building a Go module from scratch. We'll build a `hr` (Human Resources) module as a running example, mirroring the pattern used by the `contact` module (`core/modules/contact/`) and the CRM module (`core/modules/crm/internal/crm.go`).
+
+!!! tip "Faster start: scaffold it"
+    `go run ./tools/eerp-init-module -p core/modules/hr -t go` generates the `module.json`,
+    `module.go`, a starter entity, frontend view files, and wires the blank import into
+    `core/modules/all/all.go` automatically. See [Building a Module From
+    Scratch](module-from-scratch.md) for the full walkthrough using the tool. This guide explains
+    each piece by hand so you understand what the generator produces.
 
 ---
 
@@ -135,57 +142,88 @@ type BaseModel struct {
 
 ---
 
-## Step 4: Declare the Database Schema
+## Step 4: Self-register with `module.go`
 
-For Go modules, the schema declaration lives in Go rather than in a Rust `.wasm` binary. You have two options:
-
-### Option A: Go-side migration struct (recommended for monolith)
-
-Define the migration as a Go value and apply it directly at service startup:
+The schema is **not** hand-written as a migration struct or a SQL file — it is derived
+automatically from the entity struct. Every Go module implements the small `GoModule` interface
+(`core/internal/module/go_module.go`) and enlists itself from `init()`:
 
 ```go
-// internal/migration.go
-package hr
-
-import "core/internal/types"
-
-var Migration = types.Migration{
-    Entity:  "employees",
-    Version: 1,
-    Operations: []types.Operation{
-        {Type: "add_column", Table: "employees", Column: "department",   SQLType: "VARCHAR(128)", Nullable: false},
-        {Type: "add_column", Table: "employees", Column: "start_date",   SQLType: "DATE",         Nullable: false},
-        {Type: "add_column", Table: "employees", Column: "salary_cents", SQLType: "BIGINT",        Nullable: false},
-        {Type: "add_column", Table: "employees", Column: "status",       SQLType: "VARCHAR(32)",   Nullable: false},
-    },
+// core/internal/module/go_module.go
+type GoModule interface {
+    Name() string
+    Register() error // orm.Register[T]() for new tables, orm.ExtendSchema() for others'
 }
 ```
 
-Pass this to the migration applier in `main.go` (see Step 7).
+**`module.go`** — mirror of `core/modules/contact/module.go`:
 
-### Option B: Raw SQL migration file
+```go
+package hr
 
-For complex schemas (indexes, constraints, foreign keys), write a raw SQL file and execute it at startup:
+import (
+    "core/internal/module"
+    "core/modules/hr/internal"
+    "core/orm"
+)
 
-```sql
--- modules/hr/schema.sql
-CREATE TABLE IF NOT EXISTS employees (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at    TIMESTAMPTZ,
-    department    VARCHAR(128) NOT NULL,
-    start_date    DATE NOT NULL,
-    salary_cents  BIGINT NOT NULL,
-    status        VARCHAR(32) NOT NULL
-);
+func init() {
+    module.RegisterGoModule(&hrModule{})
+}
 
-CREATE INDEX IF NOT EXISTS employees_department_idx ON employees (department);
-CREATE INDEX IF NOT EXISTS employees_status_idx ON employees (status);
+type hrModule struct{}
+
+func (m *hrModule) Name() string { return "hr" }
+
+func (m *hrModule) Register() error {
+    return orm.Register[internal.Employee]()
+}
 ```
 
-!!! warning "No auto-create"
-    The ORM's `MustRepo` call does not auto-create the base table. Use one of the options above to ensure the table exists before the service starts.
+That's the whole integration contract — `orm.Register[T]` builds an API descriptor from the struct
+(column list, table name, route prefix, soft-delete support) and, at startup,
+`module.LoadGoModules` snapshots the schema registry before and after this call to derive the DDL
+diff. **You never write a migration file.** New tables get `CREATE TABLE IF NOT EXISTS`
+(`BaseModel` columns included); new columns on an already-registered table get `ADD COLUMN IF NOT
+EXISTS`. See [Server Integration → Startup migration flow](../development/server-integration.md#startup-migration-flow)
+for the exact sequence.
+
+### Registration options
+
+```go
+orm.Register[internal.Employee](
+    orm.WithTableName("employees"),                          // override the derived table name
+    orm.WithReadOnlyFields("tenant_id"),                      // accepted from DB, rejected on write
+    orm.WithExcludeFields("salary_cents"),                    // removed from the API surface entirely
+    orm.WithFieldGroups(map[string][]string{"salary_cents": {"hr_manager"}}), // visible only to callers in this group — see ADR-014
+)
+
+// Register with the ORM but expose NO HTTP routes (internal-only table):
+orm.Register[internal.AuditLog](orm.WithExcluded())
+```
+
+!!! warning "Security-critical exclusions belong in code, not api.yaml"
+    `api.yaml` (`api_config_path` in the config) carries only cosmetic API-surface overrides.
+    Fields that must never cross the wire are excluded in code via `WithExcludeFields` /
+    `WithExcluded` / `WithFieldGroups` — code-level options are fail-closed.
+
+### DDL the auto-migration can't derive
+
+If you need DDL beyond `CREATE TABLE`/`ADD COLUMN`/indexes — join tables with composite primary
+keys, unique constraints (struct tags have no `unique` modifier), custom foreign keys — implement
+the optional `Migrator` interface on the same struct; it runs after the auto-migration:
+
+```go
+func (m *hrModule) Migrate(ctx context.Context, db *orm.DB) error {
+    _, err := db.Exec(ctx, `
+        CREATE TABLE IF NOT EXISTS employee_teams (
+            employee_id UUID NOT NULL REFERENCES employee(id),
+            team_id     UUID NOT NULL,
+            PRIMARY KEY (employee_id, team_id)
+        )`)
+    return err
+}
+```
 
 ---
 
@@ -389,36 +427,36 @@ The callback rolls back on any non-nil return. Never use `s.employees` directly 
 
 ## Step 7: Register with the Core
 
-Wire the service into `cmd/app/main.go` after the DB pool is open:
+`cmd/app/main.go` never references individual modules — it blank-imports the aggregator package
+`core/modules/all`, whose only job is to trigger every module's `init()`:
 
 ```go
-// cmd/app/main.go
+// core/modules/all/all.go
+//go:build !wasip1
+
+package all
 
 import (
-    "core/modules/crm/internal"
-    hr "core/modules/hr/internal"
+    _ "core/modules/auth"
+    _ "core/modules/contact"
+    _ "core/modules/crm"
+    _ "core/modules/hr" // ← your new module
 )
-
-func main() {
-    // ... DB setup, WASM loader ...
-
-    // Wire Go services
-    crmService := internal.New(Db)
-    hrService := hr.New(Db)
-
-    _ = crmService  // pass to HTTP handlers once router is implemented
-    _ = hrService
-}
 ```
 
-If the `hr` module has a Go-side migration (Option A from Step 4), apply it here:
+Adding that one line is the entire server-side integration. When the binary starts, Go runs
+`hr.init()`, which calls `module.RegisterGoModule(&hrModule{})` from Step 4 — the module is now
+enlisted, its schema derives and migrates automatically, and generic CRUD routes mount at
+`/api/v1/employee` behind JWT + permission middleware. See [Server
+Integration](../development/server-integration.md) for the full startup sequence and the routes
+you get for free.
+
+If your service needs endpoints *beyond* generic CRUD, mount a custom group on the underlying Echo
+instance the way `cron`'s module does:
 
 ```go
-// Apply Go-side schema migration before creating the service
-if err := applyGoMigration(ctx, Db, hr.Migration); err != nil {
-    common.Logger.Error("❌ hr migration failed", zap.Error(err))
-}
-hrService := hr.New(Db)
+grp := srv.Echo().Group("/api/v1/hr", jwtMw, permMw)
+grp.POST("/employees/:id/terminate", hrHandler.Terminate)
 ```
 
 ---
@@ -431,13 +469,20 @@ Run the backend:
 make run-back
 ```
 
-For a Go-only module (no `.wasm`), you won't see WASM-specific log lines, but you should see the detector discover `module.json`:
+Every mounted route is logged at startup — the quickest way to confirm your module is live:
 
 ```
-DEBUG  module detected  {"name": "hr", "version": "0.1.0", "priority": 0}
-DEBUG  no .wasm found, skipping WASM migration  {"name": "hr"}
-INFO   hr service wired
+INFO   route  {"method": "GET",    "path": "/api/v1/employee"}
+INFO   route  {"method": "GET",    "path": "/api/v1/employee/:id"}
+INFO   route  {"method": "POST",   "path": "/api/v1/employee"}
+INFO   route  {"method": "PUT",    "path": "/api/v1/employee/:id"}
+INFO   route  {"method": "DELETE", "path": "/api/v1/employee/:id"}
+INFO   route  {"method": "POST",   "path": "/api/v1/employee/:id/restore"}
 ```
+
+A module load failure appears as `❌ Error loading Go module` naming the module and the failing
+step (`register`, `ensure table`, `ensure columns`, `migrate`) — see [Server Integration →
+Troubleshooting](../development/server-integration.md#troubleshooting).
 
 ---
 
@@ -463,28 +508,33 @@ graph LR
 
 ---
 
-## Comparison: Go vs WASM Module
+## Comparison: Go vs WASM/WASI Module
 
-| Aspect | Go monolith | WASM / Rust |
+| Aspect | Go monolith (`"type": "go"`) | WASM/WASI (`"type": "wasm"`) |
 |---|---|---|
-| Schema declaration | Go `types.Migration` struct or SQL file | `migrate()` exported from Rust, read via WASM linear memory |
+| Schema declaration | Derived automatically — `orm.Register[T]` diffing | `migrate()` exported from a `//go:build wasip1` file, read via WASM linear memory |
 | Business logic | Go service compiled into core | Go service compiled into core (same) |
-| Isolation | None — a panic crashes the process | Wasmtime sandbox — panic doesn't crash core |
-| Build toolchain | Go only | Go + Rust + `wasm32-unknown-unknown` target |
+| Isolation | None for business logic — a panic crashes the process | Wasmtime sandbox around the schema step only — panic there doesn't crash core |
+| Build toolchain | Go only | Go only, plus a `GOOS=wasip1 GOARCH=wasm` cross-compile step |
 | Startup overhead | Negligible | Wasmtime instantiation per module |
-| Use case | Current standard; fast to develop | Future standard; required when schema must be truly decoupled |
+| Use case | **Standard — every shipped module uses this** | Reach for it only when schema declaration must be sandboxed/decoupled from a core rebuild |
 
 ---
 
 ## Module Checklist
 
-- [ ] `module.json` present with unique `name`
+- [ ] `module.json` present with unique `name` and `"type": "go"`
 - [ ] Entity struct embeds `model.BaseModel`
 - [ ] Entity struct has correct `db` struct tags
-- [ ] `TableName()` method defined on entity
-- [ ] Schema declared (Go migration struct or SQL file)
-- [ ] `Service.New(db)` constructor wires repositories with `orm.MustRepo[T]`
-- [ ] Service registered in `cmd/app/main.go`
+- [ ] `TableName()` method defined on entity (or the default snake_case name is correct)
+- [ ] `module.go`: `init()` calls `module.RegisterGoModule`, `Register()` calls `orm.Register[T]`
+- [ ] Sensitive fields excluded via `WithExcludeFields` / `WithExcluded` / gated via `WithFieldGroups` (in code, not `api.yaml`)
+- [ ] `Service.New(db)` constructor wires repositories with `orm.MustRepo[T]` for any logic beyond generic CRUD
+- [ ] Blank import added to `core/modules/all/all.go`
 - [ ] Transactions used for all read-modify-write operations
 - [ ] `Query()` conditions include explicit `deleted_at IS NULL` when needed
-- [ ] Module appears in startup logs without errors
+- [ ] Module appears in the startup route log without errors
+
+**Next:** wire the module into the server in more detail — [Server
+Integration](../development/server-integration.md) — or follow the end-to-end tutorial,
+[Building a Module From Scratch](module-from-scratch.md).

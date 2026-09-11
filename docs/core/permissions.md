@@ -15,7 +15,7 @@ See [Authentication](authentication.md) for how identities are established and [
 - Check permissions before executing handlers, **failing closed** when the requirement can't be determined
 - Cache permission lookups to avoid per-request DB queries
 
-Row-level tenant isolation is a separate concern handled by the [ORM's CRUD layer](orm.md#tenant-isolation), not by this middleware.
+Row-level tenant isolation is a separate concern handled by the [ORM's CRUD layer](orm.md#tenant-isolation), not by this middleware. So is **field-level** visibility within a row a caller *can* otherwise reach — see [ORM → Field-Level Group Gating](orm.md#field-level-group-gating) and [ADR-014](../adrs/014-field-level-group-gating.md): a role-based permission decides whether an endpoint is reachable at all, while a field group decides whether one specific column of an otherwise-readable row is included in the response.
 
 ---
 

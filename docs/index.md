@@ -14,12 +14,12 @@ EERP is a **framework**, not an application. Its job is to provide a runtime and
 
 EERP uses a **hybrid module model**:
 
-- **WASM component** (Rust or any WASM-capable language): responsible only for declaring the module's database schema via the `migrate()` ABI. Runs inside a Wasmtime sandbox at startup.
+- **WASM component**: a module's own Go source, optionally cross-compiled to WebAssembly System Interface (WASI) via `GOOS=wasip1 GOARCH=wasm go build` — **not Rust**, despite older documentation and folklore to the contrary. Responsible only for declaring the module's database schema via the `migrate()` ABI, sandboxed inside Wasmtime at startup, when a module opts into this path.
 - **Go service** (monolith): implements all business logic, directly compiled into the core binary. Uses the ORM and is wired into the HTTP server.
 
 This split gives you schema isolation and sandboxing at startup, and maximum performance at request time.
 
-> **Current state**: all shipped modules (CRM, etc.) run as pure Go services. The WASM migration protocol is implemented and active in the loader; Rust-compiled `.wasm` binaries are the next step for full schema decoupling.
+> **Current state**: every module shipped today sets `"type": "go"` in its `module.json` — it compiles straight into the core binary via `module.RegisterGoModule`, and its schema is derived automatically by the ORM's own `orm.Register[T]` auto-migration diffing, not the WASM `migrate()` ABI. The WASM/WASI loader is fully implemented and active (`core/internal/module/load.go`) for the `"type": "wasm"` path, but no module currently uses it in production. See [ADR-002](adrs/002-wasm-modules.md).
 
 ```mermaid
 graph TD
@@ -37,7 +37,7 @@ graph TD
         ACC_S[Accounting Service]
     end
 
-    subgraph "WASM Modules (schema protocol — Rust)"
+    subgraph "WASM Modules (schema protocol — Go, cross-compiled to WASI)"
         CRM_W[crm.wasm]
         INV_W[inventory.wasm]
         ACC_W[accounting.wasm]
@@ -67,9 +67,12 @@ graph TD
 |---|---|---|
 | Backend | Go 1.26 | Static binaries, excellent concurrency, strong type system |
 | ORM | Custom (pgx v5) | Zero reflection at query time, ERP-specific features |
-| Module schema | Rust → WASM (Wasmtime) | Sandboxed schema declaration, language-agnostic migrate() ABI |
+| Module schema (optional) | Go → WASI (Wasmtime) | Sandboxed schema declaration via the `migrate()` ABI, when a module opts in; every shipped module today instead uses `"type": "go"` and the ORM's own auto-migration |
 | Module logic | Go (monolith) | Zero IPC overhead, full ORM access, single binary deploy |
 | Database | PostgreSQL 18 | Mature, feature-rich, excellent Go driver ecosystem |
+| Object storage | Garage (S3-compatible) | Pictures, signatures, generic attachments, and generated PDF reports |
+| PDF reports | Headless Chromium (`pdf-service`) | Real CSS/Tailwind fidelity, reuses the same descriptor model as on-screen views — see [ADR-011](adrs/011-pdf-report-generation.md) |
+| Gateway | nginx, TLS + HTTP/2 | Terminates TLS at the edge; HTTP/2 multiplexes the browser's many small relation-fetch requests — see [ADR-018](adrs/018-http2-edge-rest-batching.md) |
 | Frontend | React + Next.js (App Router) + TypeScript | Largest ecosystem and talent pool; runs on a dedicated front server (BFF) |
 | Frontend state | Zustand | Selector-based subscriptions avoid React Context re-render cascades; ~1 KB |
 
@@ -82,11 +85,19 @@ graph TD
 | Run the project for the first time | [Getting Started](getting-started.md) |
 | Understand how all the pieces fit | [Architecture Overview](architecture/index.md) |
 | Work with the database | [ORM](core/orm.md) · [Database Layer](core/database.md) |
-| Build a module (WASM/Rust path) | [Creating a WASM Module](developer-guide/creating-a-module.md) |
+| Build a module (WASM/WASI path, rarely needed) | [Creating a WASM/WASI Module](developer-guide/creating-a-module.md) |
 | Build a module (Go monolith path) | [Creating a Go Module](developer-guide/creating-a-go-module.md) |
 | Understand the frontend | [Frontend Overview](frontend/index.md) · [View Engine](frontend/view-engine.md) |
 | Add a frontend view to a module | [Creating a Frontend Module](developer-guide/creating-a-frontend-module.md) |
 | Add a new data entity | [Creating an Entity](developer-guide/creating-an-entity.md) |
+| Scaffold a whole new module | [Building a Module From Scratch](developer-guide/module-from-scratch.md) |
+| Use a specific view type or widget | [Views & Components](frontend/views-and-components/index.md) |
+| Understand workspace settings, locale, tax mode | [Settings & Workspace Configuration](core/settings.md) |
+| Add a scheduled background job | [Background Cron Scheduler](core/cron.md) |
+| Generate a PDF report | [Reports & PDF Generation](core/reports.md) |
+| Deploy with Docker Compose | [Deployment → Docker Compose](developer-guide/deployment.md#docker-compose-recommended) |
+| Understand the edge gateway / TLS+HTTP2 | [Architecture → Edge Gateway](architecture/index.md#edge-gateway-api-gateway) |
+| Compare how pictures/attachments/reports use S3 | [Object Storage Across Layers](architecture/object-storage-topology.md) |
 | Write tests | [Testing](developer-guide/testing.md) |
 | Understand a design decision | [ADRs](adrs/index.md) |
 

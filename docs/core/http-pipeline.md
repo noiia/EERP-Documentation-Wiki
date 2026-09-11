@@ -179,6 +179,36 @@ See also: [Authentication](authentication.md), [Permissions](permissions.md), [A
 
 ---
 
+## TLS/HTTP2 Edge Gateway
+
+In Docker Compose deployments, an `api-gateway` (nginx, `infra/nginx/nginx.conf`) sits in front of
+both `core-front` and `core-back` — the Echo pipeline above still applies unchanged behind it, but
+the browser never reaches Echo directly.
+
+```mermaid
+flowchart LR
+    Browser -->|"HTTPS, HTTP/2\n:443"| Gateway["api-gateway (nginx)"]
+    Browser -.->|"HTTP :80\n(301 → https, except /healthz)"| Gateway
+    Gateway -->|"HTTP/1.1"| Front["core-front :3000"]
+    Gateway -->|"HTTP/1.1"| Back["core-back :8080"]
+```
+
+- Plain `http://` (port 80) 301-redirects everything except `/healthz` to `https://` (port 443,
+  self-signed cert in dev) — HTTP/2 only works over TLS in practice (browsers, and Node's `undici`
+  client, don't negotiate cleartext h2c reliably), so :443 is the only HTTP/2 endpoint.
+- A one-shot `gateway-certs` compose service provisions the self-signed dev certificate into a
+  shared volume before nginx starts (`infra/nginx/gen-certs.sh`, idempotent). Swap in a real
+  certificate for a public-facing deployment.
+- **Next↔Go stays plain HTTP/1.1 internally, untouched.** Only the browser↔gateway hop benefits
+  from HTTP/2 multiplexing — it's the hop with many small parallel requests (relation-widget
+  lookups, field autocompletes), not the single BFF↔backend hop.
+- HTTP/2 was chosen over adopting GraphQL to solve the same N+1 relation-fetch problem; see
+  [ADR-018](../adrs/018-http2-edge-rest-batching.md) for the full reasoning, including the
+  companion fix (batching many-to-many resolution via the `in[column]` filter — see [ORM → Query
+  Parameters](orm.md#query-parameters-generic-crud)).
+
+---
+
 ## Extension Points
 
 | Extension | How |

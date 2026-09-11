@@ -19,6 +19,85 @@ The frontend and backend are deployed independently. The frontend is **no longer
 
 ---
 
+## Docker Compose (recommended)
+
+The repository ships a `compose.yml` at its root that runs the entire stack — this is the
+recommended way to run EERP anywhere beyond a single developer's laptop, including production,
+until a Kubernetes/orchestrator path is documented. The sections below (systemd, PgBouncer,
+manual builds) remain useful for a bare-metal or non-Compose deployment, but Compose is the
+default path.
+
+### Topology
+
+```mermaid
+flowchart LR
+    Browser -->|"HTTPS, HTTP/2 :443\nHTTP :80 → 301 redirect"| Gateway["api-gateway\n(nginx, TLS termination)"]
+    Gateway --> Front["core-front :3000\n(Next.js BFF)"]
+    Gateway --> Back["core-back :8080\n(Go API)"]
+    Front -->|HTTP/1.1, Bearer token| Back
+    Back --> DB[("db\nPostgreSQL 18\n:5432")]
+    Back --> Garage["garage\nS3-compatible storage\n:3900 (internal)"]
+    Back -->|"NATS request-reply\n(default render path)"| NATS["nats\n:4222"]
+    NATS --> PDF["pdf-service worker(s)\nheadless Chromium\n:8090"]
+    Certs["gateway-certs\n(one-shot: provisions\nself-signed TLS cert)"] --> Gateway
+```
+
+`core-back` talks to `pdf-service` exclusively through `nats` by default (`eerp-config.docker.json`'s
+`nats_url`) — not a direct HTTP call. `pdf-service` still runs an HTTP server too (used for its own
+healthcheck, and available as a fallback transport if `nats_url` is ever cleared), but a fresh
+`docker compose up` never calls it directly. This is what makes scaling `pdf-service` to N replicas
+(`docker compose up -d --build --scale pdf-service=N`) a zero-code-change operation — each replica
+is just another competing consumer on the same NATS queue group. See
+[ADR-011](../adrs/011-pdf-report-generation.md#amendment-nats-promoted-to-default-2026-09) and
+[Reports & PDF Generation](../core/reports.md).
+
+### Services
+
+| Service | Image / build | Purpose | Exposed to host? |
+|---|---|---|---|
+| `api-gateway` | nginx, `infra/nginx/` | TLS + HTTP/2 termination, routes to `core-front`/`core-back` — see [ADR-018](../adrs/018-http2-edge-rest-batching.md) | Yes — `:80`, `:443` |
+| `gateway-certs` | one-shot, `infra/nginx/gen-certs.sh` | Provisions a self-signed dev cert into a shared volume before nginx starts (idempotent) | No |
+| `core-back` | build: `core/Dockerfile` | The Go API server | No — reached only via the gateway |
+| `core-front` | build: `core-front/Dockerfile` | Next.js BFF (session cookie, server-side rendering) | No — reached only via the gateway |
+| `db` | `postgres:18` | Primary database | `:5432` (dev convenience; consider removing in production) |
+| `garage` | `dxflrs/garage:v2.3.0` | S3-compatible object storage for pictures/signatures/attachments/reports — see [Object Storage](../core/object-storage.md) | No — internal `:3900` only |
+| `pdf-service` | build: `tools/pdf-service/Dockerfile` | Headless-Chromium PDF rendering worker(s), reached via `nats` — see [Reports & PDF Generation](../core/reports.md) | No |
+| `nats` | `nats:2.10-alpine` | Message bus `core-back` uses by default to reach `pdf-service` (request-reply); also what makes horizontal `pdf-service` scaling a zero-code-change operation | No |
+
+Bootstrap `garage` once after first bringing the stack up (see [Getting Started → Object
+Storage](../getting-started.md#object-storage-optional)):
+
+```bash
+make garage-init
+```
+
+### Running it
+
+```bash
+make run          # docker compose up, backend, and frontend together
+# or, equivalently for a pure-Compose deployment:
+docker compose up -d
+```
+
+Swap the self-signed certificate `gateway-certs` generates for a real one before exposing this
+past a trusted network — see [HTTP Pipeline → TLS/HTTP2 Edge Gateway](../core/http-pipeline.md#tlshttp2-edge-gateway).
+
+### The compose file
+
+```yaml
+# compose.yml — paste the project's actual manifest here.
+# Reproduced service-by-service in the table above; the literal file is intentionally
+# not duplicated in this page to avoid drifting from the source of truth in the repository root.
+```
+
+!!! note "Filling in the manifest above"
+    The service topology, ports, and purposes documented on this page are accurate to the current
+    `compose.yml` at the repository root. Paste the file's actual contents into the block above (or
+    link to it directly) when finalizing this page for publication, so the wiki carries the literal,
+    copy-pasteable manifest alongside its explanation.
+
+---
+
 ## Building the Backend
 
 ```bash
@@ -34,15 +113,19 @@ go build -ldflags="-s -w" -o eerp-server ./cmd/app/...
 
 ---
 
-## Building WASM Modules
+## Building WASM Modules (only for modules with `"type": "wasm"`)
+
+WASM modules are the module's own **Go** source, cross-compiled to WASI — not Rust. Every module
+shipped today has `"type": "go"` and skips this step entirely (see
+[ADR-002](../adrs/002-wasm-modules.md)).
 
 ```bash
-# From repo root
+# From repo root — builds every "type": "wasm" module
 make build
 
 # Or directly for a specific module
-cd core/modules/crm
-cargo build --target wasm32-unknown-unknown --release
+cd core/modules/hr
+GOOS=wasip1 GOARCH=wasm go build -o build/hr.wasm .
 ```
 
 The `.wasm` binaries need to be present in a directory listed in `module_root` in the config file, alongside their `module.json` files.
@@ -154,53 +237,21 @@ systemctl enable --now eerp
 
 ---
 
-## Docker
+## Docker (building images directly, outside Compose)
 
-```dockerfile
-# Build stage
-FROM golang:1.26-alpine AS builder
-WORKDIR /build
-COPY core/ .
-RUN go build -ldflags="-s -w" -o /eerp-server ./cmd/app/...
+Prefer [Docker Compose](#docker-compose-recommended) above for a full deployment — it already
+wires together the real, current `core/Dockerfile` (multi-stage: cross-compiles any `"type":
+"wasm"` module to WASI, then builds the backend binary with CGO on for `wasmtime-go`) and
+`core-front/Dockerfile` (a 4-stage pnpm/Next.js build) with the database, object storage, PDF
+service, and gateway. Build either image standalone only if you're integrating EERP into your own
+orchestration rather than using Compose directly:
 
-# Runtime stage
-FROM alpine:3.20
-RUN adduser -D eerp
-COPY --from=builder /eerp-server /usr/local/bin/eerp-server
-COPY modules/ /opt/eerp/modules/
-USER eerp
-EXPOSE 8080
-ENTRYPOINT ["eerp-server"]
-CMD ["-config=/config/eerp-config.json"]
+```bash
+docker build -t eerp-core -f core/Dockerfile .
+docker build -t eerp-front -f core-front/Dockerfile .
 ```
 
-Mount the config file as a volume or Kubernetes Secret:
-
-```yaml
-# docker-compose.prod.yml
-services:
-  eerp:
-    image: eerp:latest
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./config/eerp-config.json:/config/eerp-config.json:ro
-      - ./modules:/opt/eerp/modules:ro
-    depends_on:
-      - db
-
-  db:
-    image: postgres:18
-    environment:
-      POSTGRES_DB: eerp_prod
-      POSTGRES_USER: eerp
-      POSTGRES_PASSWORD: "${DB_PASSWORD}"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
-volumes:
-  pgdata:
-```
+Mount the config file as a volume or Kubernetes Secret, matching the field reference above.
 
 ---
 
@@ -251,9 +302,14 @@ curl http://localhost:8080/ready    # → 200 OK (or 503 if DB is down)
 
 ## Deploying a New Module
 
-1. Compile the Rust crate:
+For the standard `"type": "go"` path (every shipped module today), a new module ships **inside the
+core binary** — there's nothing separate to copy; rebuild and redeploy the backend binary as usual.
+
+For a `"type": "wasm"` module specifically:
+
+1. Cross-compile it:
    ```bash
-   cargo build --target wasm32-unknown-unknown --release
+   GOOS=wasip1 GOARCH=wasm go build -o build/<name>.wasm .
    ```
 
 2. Copy the `.wasm` binary and `module.json` to the `module_root` directory on the server.

@@ -98,9 +98,27 @@ Because the browser only ever talks to Next, the Go backend can sit on a private
 
 ---
 
+## Declarative permission gating: `<Can>`
+
+`<Can permission="crm:contacts:write">...</Can>` (`auth/Can.tsx`) is the declarative counterpart to
+the `usePermission` hook mentioned in [View Engine → Permission
+gate](view-engine.md#permission-gate) — it renders its children only when the session mirror's
+effective permissions satisfy the check, and nothing otherwise. Like `usePermission`, it is UI
+gating only: the server re-authorizes every request regardless of what the client renders.
+
+A second, narrower gate exists at the **field** level, independent of route permissions:
+`FieldDescriptor.groups` mirrors a server-side field-group gate (see [ORM → Field-Level Group
+Gating](../core/orm.md#field-level-group-gating) and
+[ADR-014](../adrs/014-field-level-group-gating.md)). The server already omits a gated field from
+the response entirely — the client-side check only avoids rendering an empty slot for a field the
+caller was never sent, decoded from the JWT's `groups` claim into
+`useSessionStore`'s `Identity.groups`.
+
 ## Related
 
 - [ADR-005: JWT Authentication](../adrs/005-jwt-auth.md) — the token + cookie decision.
+- [ADR-013: Multi-Company](../adrs/013-multi-company.md) — the per-user active-company preference alongside identity.
+- [ADR-014: Field-Level Group Gating](../adrs/014-field-level-group-gating.md) — the `groups` claim and `<Can>`'s field-level sibling.
 - [Authentication (core)](../core/authentication.md) — backend issuance and validation.
 - [Permissions (core)](../core/permissions.md) — the permission model the DSL maps onto.
 - [View Engine](view-engine.md) · [Frontend Overview](index.md).

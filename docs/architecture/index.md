@@ -10,19 +10,29 @@ EERP modules have two components with different responsibilities:
 
 | Component | Language | When it runs | What it does |
 |---|---|---|---|
-| WASM binary | Rust (or any WASM-capable language) | Startup only | Declares the module's DB schema via `migrate()` ABI |
+| WASM binary (optional) | Go, cross-compiled to WASI (`GOOS=wasip1 GOARCH=wasm`) | Startup only | Declares the module's DB schema via `migrate()` ABI, when a module sets `"type": "wasm"` |
 | Go service | Go (compiled into the monolith) | Every request | Implements business logic, exposes HTTP handlers |
 
 This split gives sandboxed schema ownership without the IPC cost of routing every request through WASM.
 
-> **Current state**: Go services are the active path for business logic (see `core/modules/crm/`). The WASM loader is implemented and runs at startup; Rust-compiled `.wasm` binaries are the roadmap for full schema decoupling.
+!!! danger "This is Go, not Rust"
+    Earlier documentation (and the ADR-002 decision record before its correction) described the
+    WASM path as a Rust toolchain. That subsystem never existed — no `Cargo.toml`, no `.rs`
+    source, anywhere in the repository. `make build` cross-compiles each module's own **Go**
+    source to WASI. See [ADR-002](../adrs/002-wasm-modules.md).
+
+> **Current state**: every shipped module sets `"type": "go"` in its `module.json` and compiles directly into the core binary via `module.RegisterGoModule` (see `core/modules/crm/`, `core/modules/all/all.go`). Its schema is derived automatically by the ORM's `orm.Register[T]` auto-migration diffing — no `migrate()` call involved. The Wasmtime/WASI loader is fully implemented and active for the `"type": "wasm"` path (`core/internal/module/load.go`), but no shipped module currently uses it.
 
 ---
 
-## The Four Layers
+## The Layers
 
 ```mermaid
 graph TB
+    subgraph "Layer 0 — Edge Gateway"
+        GW["api-gateway (nginx)<br/>TLS + HTTP/2 termination"]
+    end
+
     subgraph "Layer 2 — Frontend"
         FE["Next.js Front Server<br/>(React + Zustand, BFF)"]
     end
@@ -43,7 +53,7 @@ graph TB
         ACC_S["Accounting Service"]
     end
 
-    subgraph "Layer 4 — WASM Schema Protocol (Rust)"
+    subgraph "Layer 4 — WASM Schema Protocol (Go, cross-compiled to WASI; optional, unused by shipped modules)"
         CRM_W["crm.wasm<br/>migrate()"]
         INV_W["inventory.wasm<br/>migrate()"]
         ACC_W["accounting.wasm<br/>migrate()"]
@@ -53,6 +63,9 @@ graph TB
         PG[("PostgreSQL 18")]
     end
 
+    Browser(["Browser"]) -->|"HTTPS :443\nHTTP :80 → 301"| GW
+    GW -->|"/ (everything else)"| FE
+    GW -->|"/api/v1/*, /health"| HTTP
     FE -->|JSON over HTTP| HTTP
     HTTP --> AUTH
     AUTH --> DI
@@ -71,7 +84,7 @@ graph TB
     LOG -.->|instruments| ORM
 ```
 
-Each layer has a strict contract with the one below it. Modules never talk to each other directly — all inter-module communication flows through the core.
+Each layer has a strict contract with the one below it. Modules never talk to each other directly — all inter-module communication flows through the core. The gateway is the one layer that sits *outside* this chain of contracts rather than inside it: it terminates TLS and routes by path, but never inspects or participates in the application protocol above it (no auth, no business logic) — see [Edge Gateway](#edge-gateway-api-gateway) below.
 
 ---
 
@@ -79,16 +92,16 @@ Each layer has a strict contract with the one below it. Modules never talk to ea
 
 ### Schema ownership without IPC
 
-Classic ERP systems suffer from tight coupling between business logic and framework code. EERP inverts this: each module owns its database schema via the WASM `migrate()` ABI (sandboxed, language-agnostic), while business logic runs as a compiled Go service with direct ORM access and no serialization overhead per request.
+Classic ERP systems suffer from tight coupling between business logic and framework code. EERP inverts this: each module owns its database schema, while business logic runs as a compiled Go service with direct ORM access and no serialization overhead per request. Schema ownership has two mechanisms today: the ORM's own auto-migration diffing (`orm.Register[T]`, used by every shipped `"type": "go"` module) and, optionally, the sandboxed WASM `migrate()` ABI for a module that sets `"type": "wasm"`.
 
-The WASM boundary is intentionally narrow: it is only crossed once per module per startup, not on every HTTP request.
+The WASM boundary, when used, is intentionally narrow: it is only crossed once per module per startup, not on every HTTP request.
 
 ### Schema ownership per module
 
-Each module owns its database schema. When the core starts, the WASM loader calls `migrate()` on each module's binary, reads the returned JSON from WASM linear memory, and applies the DDL operations. This means:
+Each module owns its database schema. For the standard `"type": "go"` path, `module.LoadGoModules` snapshots the schema registry before and after a module's `Register()` call and applies the diff as idempotent DDL (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) — see [Server Integration → Startup migration flow](../development/server-integration.md#startup-migration-flow). For the optional `"type": "wasm"` path, the WASM loader instead calls `migrate()` on the module's cross-compiled binary, reads the returned JSON from WASM linear memory, and applies the DDL operations directly. Either way:
 
 - A module can be deployed to any EERP instance without manual schema setup.
-- Modules evolve their schemas independently via version-gated migrations.
+- Modules evolve their schemas independently.
 - The core never contains domain-specific table definitions.
 
 ### Type safety without reflection overhead
@@ -98,6 +111,41 @@ The ORM uses Go generics and compile-time struct inspection to build all metadat
 ---
 
 ## Layer Responsibilities
+
+### Edge Gateway (api-gateway)
+
+`api-gateway` (nginx, `infra/nginx/nginx.conf`) is the **only** thing the browser ever talks to in
+a Compose deployment — neither `core-front` nor `core-back` publish a host port of their own
+(`compose.yml`'s `expose:`, not `ports:`, on both). It is a thin, stateless routing/TLS layer: it
+holds no session state, makes no authorization decisions, and never touches application data.
+
+**Flows** — routed by path, not by host or method:
+
+| Path | Routed to | Notes |
+|---|---|---|
+| `/api/v1/*`, `/health` | `core-back :8080` | The Go API, straight through |
+| `/healthz` | itself | Gateway's own liveness probe; the one path exempt from the HTTPS redirect |
+| everything else | `core-front :3000` | Next.js pages, static assets, and the BFF's own `/api/*` routes (auth, pictures, attachments, reports — see [Object Storage Across Layers](../architecture/object-storage-topology.md)) |
+
+Plain `http://` (port 80) 301-redirects to `https://` (port 443) for every path except `/healthz`.
+HTTP/2 is negotiated only on the TLS listener — see [HTTP Pipeline → TLS/HTTP2 Edge
+Gateway](../core/http-pipeline.md#tlshttp2-edge-gateway) for why (browsers, and Node's `undici`
+client, don't reliably speak cleartext h2c) and for the ADR behind it
+([ADR-018](../adrs/018-http2-edge-rest-batching.md)).
+
+**Dependencies** — the gateway is deliberately the *last* thing to become ready:
+
+- `gateway-certs` (a one-shot container) must complete successfully first — it provisions a
+  self-signed TLS certificate into a shared volume (`infra/nginx/gen-certs.sh`, idempotent). The
+  gateway has nothing to terminate TLS with until this has run once.
+- `core-front` must have started (`condition: service_started` — not `service_healthy`; the
+  gateway doesn't block on the frontend being fully warmed up, just running).
+- It has **no** direct dependency on `core-back`, `db`, `garage`, `nats`, or `pdf-service` — those
+  are `core-back`'s dependencies, one layer further in. A gateway that's up with a backend that
+  isn't simply returns upstream errors for `/api/v1/*`, rather than failing to start.
+
+See [Deployment → Docker Compose](../developer-guide/deployment.md#docker-compose-recommended) for
+the full service topology this sits in front of.
 
 ### Core Runtime (Go)
 
@@ -113,9 +161,9 @@ The ORM uses Go generics and compile-time struct inspection to build all metadat
 
 The core is deliberately minimal. It provides infrastructure; it contains no business logic.
 
-### WASM Modules (Schema Protocol)
+### WASM Modules (Schema Protocol) — optional path
 
-Each module's WASM binary:
+Only relevant to a module that sets `"type": "wasm"`; every shipped module today uses `"type": "go"` instead and skips this entirely. Each module's WASM binary:
 
 1. Declares its identity and dependencies in `module.json`
 2. Exports `migrate() → *u8` and `migrate_len() → usize` — the schema ABI

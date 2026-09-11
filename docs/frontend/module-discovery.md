@@ -95,6 +95,24 @@ A module is authored **once** and consumed by both sides through its own `module
 
 ---
 
+## i18n discovery
+
+A module may ship an optional `i18n/` folder — a gettext `<name>.pot` template plus one
+`<locale>.po` file per language, sitting at the same level as `views/` (see
+[ADR-019](../adrs/019-per-model-view-files.md)). The same discovery family that generates
+`generated-modules.ts` also compiles these catalogs in at build time, and the UI offers them under
+Settings → Translations. The Go core owns only *which* language each user sees — the per-user
+`preferred_locale` and the workspace default in `app_settings` (see
+[Settings](../core/settings.md)) — never the catalog content itself.
+
+## Related backend base URL resolution
+
+The generated module registry doesn't just wire up routes — the same discovery scripts resolve the
+backend base URL the server-side `ApiClient` targets, from `backend_host`/`public_address`/
+`backend_port`/`backend_version` in the shared config into `{API_BASE}/api/v{API_VERSION}`. If
+module routes resolve but every request 404s or times out, check this resolution before assuming a
+routing bug.
+
 ## Definition of done
 
 A throwaway module folder placed *outside* the frontend and listed in the repo-root `eerp-config.json`'s `module_root` renders its route **server-side** in the running service; editing its view rebuilds. The generated manifest stays gitignored. The CRM module is the worked example — see [Creating a Frontend Module](../developer-guide/creating-a-frontend-module.md).

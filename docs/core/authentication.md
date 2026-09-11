@@ -220,6 +220,20 @@ Permissions follow the same route-derived `module:resource:action` convention as
 
 ---
 
+## Multi-Company (Within a Tenant)
+
+A tenant can host several **Companies** (legal entities) — a settings-scoping concept, not a second
+tenancy dimension. `Users.ActiveCompanyID` is a per-user preference (mirroring `preferred_locale`
+exactly), read and written through the existing `GET/PUT /api/v1/me/preferences` endpoint rather
+than a new one — switching company is instant, with no token re-issue. Business tables (contacts,
+invoices, CRM records) carry no `company_id` and are unaffected by which company is active; only
+workspace *settings* (locale, number format, view configuration, report page formats) and a shared
+company name/address/phone/email profile are company-scoped. See
+[ADR-013](../adrs/013-multi-company.md) and [Settings & Workspace
+Configuration](settings.md#multi-company-scoping) for the full mechanism.
+
+---
+
 ## Multi-Tenancy
 
 Every entity that belongs to a tenant has a `tenant_id` column. The JWT middleware reads the `tenant` claim from the token and stamps it onto the request context (`orm/access.WithTenant`).

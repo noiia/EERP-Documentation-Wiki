@@ -64,4 +64,4 @@ graph TD
 | `auth` | `core/modules/auth/` | A module that ships core infrastructure |
 
 !!! note "Relationship to the Developer Guide section"
-    The [Developer Guide](../developer-guide/creating-a-go-module.md) contains earlier, more granular guides (WASM/Rust path, entity deep-dive, testing, deployment). This Development section is the up-to-date, end-to-end path for the standard case: a pure-Go module with auto-derived migration and routes.
+    The [Developer Guide](../developer-guide/creating-a-go-module.md) contains earlier, more granular guides (the WASM/WASI path, entity deep-dive, testing, deployment). This Development section is the up-to-date, end-to-end path for the standard case: a pure-Go module with auto-derived migration and routes. For the fastest start using the actual scaffolding tool, see [Building a Module From Scratch](../developer-guide/module-from-scratch.md).

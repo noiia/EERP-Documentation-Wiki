@@ -85,11 +85,13 @@ nav:
   - Getting Started: getting-started.md
   - Architecture:
       - Overview: architecture/index.md
+      - Object Storage Across Layers: architecture/object-storage-topology.md
   - Core Components:
       - ORM: core/orm.md
       - Module System: core/module-system.md
       - Database Layer: core/database.md
       - Configuration: core/configuration.md
+      - "Settings & Workspace Configuration": core/settings.md
       - HTTP Pipeline: core/http-pipeline.md
       - Automatic Router: core/router.md
       - Dependency Injection: core/dependency-injection.md
@@ -98,18 +100,41 @@ nav:
       - Permissions: core/permissions.md
       - Error Handling: core/error-handling.md
       - Object Storage: core/object-storage.md
+      - Record-Anchored Services: core/record-anchored-services.md
+      - Background Cron Scheduler: core/cron.md
+      - Reports & PDF Generation: core/reports.md
   - Frontend:
       - Overview: frontend/index.md
       - "View Engine (@eerp/core-front)": frontend/view-engine.md
       - Module Discovery: frontend/module-discovery.md
       - "Authentication (BFF)": frontend/authentication.md
+      - Views & Components:
+          - Overview: frontend/views-and-components/index.md
+          - List View: frontend/views-and-components/list-view.md
+          - Kanban View: frontend/views-and-components/kanban-view.md
+          - Calendar View: frontend/views-and-components/calendar-view.md
+          - Graph View: frontend/views-and-components/graph-view.md
+          - Form View: frontend/views-and-components/form-view.md
+          - Catalog View: frontend/views-and-components/catalog-view.md
+          - Dashboard View: frontend/views-and-components/dashboard-view.md
+          - Report View: frontend/views-and-components/report-view.md
+          - Relation Widgets: frontend/views-and-components/relation-widgets.md
+          - Address Widget: frontend/views-and-components/address-widget.md
+          - Totals Widget: frontend/views-and-components/totals-widget.md
+          - "Picture, Signature & File Widgets": frontend/views-and-components/picture-signature-file-widgets.md
+          - Search & Filter Bar: frontend/views-and-components/search-filter-bar.md
+          - Chatter Panel: frontend/views-and-components/chatter-panel.md
+          - Form Chrome: frontend/views-and-components/form-chrome.md
+          - Header Menu & Navigation: frontend/views-and-components/header-menu-navigation.md
+          - Undo Toast: frontend/views-and-components/undo-toast.md
   - Development:
       - Overview: development/index.md
       - Developing a Module: development/developing-a-module.md
       - Server Integration: development/server-integration.md
   - Developer Guide:
-      - "Creating a Module (WASM/Rust)": developer-guide/creating-a-module.md
+      - "Building a Module From Scratch": developer-guide/module-from-scratch.md
       - "Creating a Module (Go monolith)": developer-guide/creating-a-go-module.md
+      - "Creating a Module (WASM/WASI)": developer-guide/creating-a-module.md
       - "Creating a Frontend Module": developer-guide/creating-a-frontend-module.md
       - Creating an Entity: developer-guide/creating-an-entity.md
       - Testing: developer-guide/testing.md
@@ -126,3 +151,12 @@ nav:
       - "ADR-008: Default Form Anatomy": adrs/008-form-anatomy.md
       - "ADR-009: Module Lifecycle via API": adrs/009-module-lifecycle-api.md
       - "ADR-010: Live Module Lifecycle": adrs/010-live-module-lifecycle.md
+      - "ADR-011: PDF Report Generation": adrs/011-pdf-report-generation.md
+      - "ADR-012: Form Actions Menu": adrs/012-form-actions-menu.md
+      - "ADR-013: Multi-Company": adrs/013-multi-company.md
+      - "ADR-014: Field-Level Group Gating": adrs/014-field-level-group-gating.md
+      - "ADR-015: Search/Filter Bar": adrs/015-search-filter-bar.md
+      - "ADR-016: Undo Toast": adrs/016-undo-toast.md
+      - "ADR-017: Cron Scheduler": adrs/017-cron-scheduler.md
+      - "ADR-018: HTTP/2 Edge & REST Batching": adrs/018-http2-edge-rest-batching.md
+      - "ADR-019: Per-Model View Files": adrs/019-per-model-view-files.md

@@ -1,6 +1,6 @@
-# Object Storage (Pictures & Signatures)
+# Object Storage (Pictures, Signatures & Attachments)
 
-EERP stores binary field content — pictures and hand-drawn signatures — in S3-compatible object storage, keyed by metadata rows in PostgreSQL. This page covers the backend service; see [View Engine → Field Widgets](../frontend/view-engine.md#field-widgets) for the `picture`/`signature` widgets that use it.
+EERP stores binary field content — pictures, hand-drawn signatures, and generic file attachments — in S3-compatible object storage, keyed by metadata rows in PostgreSQL. This page covers both backend services (`internal/pictures` and its sibling `internal/attachments`); see [View Engine → Field Widgets](../frontend/view-engine.md#field-widgets) for the `picture`/`signature`/`file` widgets that use them.
 
 ---
 
@@ -126,9 +126,35 @@ This starts the `garage` container and runs `infra/garage/init.sh`, which is ide
 
 ---
 
+## Attachments (Generic Files)
+
+`internal/attachments` is the non-image sibling of `internal/pictures`, backing the `boolean/file`
+field widget for arbitrary files a picture's image whitelist would reject (a purchase invoice, a
+generated rent-receipt PDF). Same one-row-per-`(tenant, table, record, field)` anchor and S3-backed
+storage — it reuses `pictures.NewS3Store`/`ObjectStore` verbatim, a second client instance off the
+same `s3_*` config, since the object-store layer was already provider-agnostic. The differences:
+
+- No MIME whitelist — any file type is accepted.
+- A real `Filename` column, round-tripped as the download's `Content-Disposition` header — a
+  picture is only ever rendered inline as an `<img>`, never offered as a named download.
+
+| Method | Route | Permission |
+|---|---|---|
+| `POST` | `/api/v1/attachments` | `attachments:attachments:write` |
+| `GET` | `/api/v1/attachments?table=&record=&field=` | `attachments:attachments:read` |
+| `GET` | `/api/v1/attachments/:id` | `attachments:attachments:read` |
+| `DELETE` | `/api/v1/attachments/:id` | `attachments:attachments:delete` |
+
+Mounted only when `s3_*` is configured — the same gate as pictures.
+
+---
+
 ## Related
 
-- [View Engine → Field Widgets](../frontend/view-engine.md#field-widgets) — the `boolean/picture` and `boolean/signature` widgets that upload/render through this service.
-- [ADR-008: Default Form Anatomy](../adrs/008-form-anatomy.md) — the record-anchored-data category this service exemplifies.
+- [View Engine → Field Widgets](../frontend/view-engine.md#field-widgets) — the `boolean/picture`, `boolean/signature`, and `boolean/file` widgets that upload/render through this service.
+- [Views & Components → Picture, Signature & File Widgets](../frontend/views-and-components/picture-signature-file-widgets.md)
+- [ADR-008: Default Form Anatomy](../adrs/008-form-anatomy.md) — the record-anchored-data category this service exemplifies; see [Record-Anchored Services](record-anchored-services.md) for its siblings (chatter, notebook, saved filters).
+- [Reports & PDF Generation](reports.md) — another consumer of the same Garage/S3 backend.
+- [Object Storage Across Layers](../architecture/object-storage-topology.md) — pictures, attachments, and reports compared side by side.
 - [Configuration](configuration.md) — the full `eerp-config.json` field reference.
 - [Getting Started](../getting-started.md) — local environment setup, including `make garage-init`.

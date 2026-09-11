@@ -317,8 +317,37 @@ The generic CRUD list endpoint (`GET /api/v1/{table}`) accepts bracketed query p
 |---|---|---|
 | `filter[<column>]=<value>` | Exact match (`column::text = $1`) | `?filter[status]=won` |
 | `search[<column>]=<text>` | Case-insensitive containment (`column::text ILIKE '%'\|\|$1\|\|'%'`) | `?search[name]=mart` |
+| `in[<column>]=<v1>,<v2>,...` | One of several values (`column::text = ANY($1)`) | `?in[id]=<id1>,<id2>` |
+| `gt[<column>]=`, `gte[<column>]=`, `lt[<column>]=`, `lte[<column>]=` | Range comparison, type-aware cast (`numeric` or `timestamptz`, derived from `FieldMeta.GoType` — never a lexicographic `::text` compare) | `?gte[created_at]=2026-01-01` |
+| `distinct=<column>` (combinable with the above) | Returns that column's distinct values plus per-value row counts (capped at 500), instead of a paginated page | `?distinct=status` |
 
-Both are validated against the table's registered columns before touching SQL — an unknown column is a `400` (`"unknown filter column: …"`), not a silently-ignored parameter or an injection risk, since only known-safe identifiers are ever interpolated. There are no range/comparison operators (no `gt`/`lt`) — only exact match and substring search exist today. `filter[col]` is what the frontend uses to scope relation reads (an o2m's inverse list, an m2m's junction rows); `search[col]` backs the m2o relation widget's autocomplete. See [View Engine → Relation widgets](../frontend/view-engine.md#field-widgets) for the client side.
+Every one of these is validated against the table's registered columns before touching SQL — an unknown column is a `400` (`"unknown filter column: …"`), not a silently-ignored parameter or an injection risk, since only known-safe identifiers are ever interpolated. `filter[col]` is what the frontend uses to scope relation reads (an o2m's inverse list, an m2m's junction rows); `search[col]` backs the m2o relation widget's autocomplete; `in[col]` is what the built-in [search/filter bar](../adrs/015-search-filter-bar.md) uses to batch-resolve many-to-many links in one round trip instead of one request per row (see [ADR-018](../adrs/018-http2-edge-rest-batching.md)); `distinct=` backs the search bar's group-by section. See [View Engine → Relation widgets](../frontend/view-engine.md#field-widgets) and [Search & Filter Bar](../frontend/views-and-components/search-filter-bar.md) for the client side.
+
+### Field-Level Group Gating
+
+A column can be restricted to callers whose resolved role-group set intersects a declared list, independent of the `filter`/`search`/`in`/range/`distinct` parameters above:
+
+```go
+orm.Register[Employee](orm.WithFieldGroups(map[string][]string{
+    "salary_cents": {"hr_manager"},
+}))
+```
+
+`FieldMeta.Groups` (empty by default = ungated) is checked in exactly one place for *response*
+bodies — `crud.BuildResponse` **omits** a gated column's key entirely (never nulls it) when the
+caller's groups don't intersect — and in exactly one place for *queries* — `Repository.checkColumn`
+rejects a gated column used in `filter`/`search`/`in`/range/`distinct` with the same
+`"unknown filter column"` error a nonexistent column gets, so a caller without the group can't
+infer a gated value by filtering on it either. A field with no `Groups` declared is completely
+unaffected. The caller's groups arrive via `core/orm/access.WithGroups`/`GroupsFromContext` (mirrors
+`WithTenant`/`TenantFromContext`), resolved once at login/refresh from the user's roles plus every
+role they transitively "belong to." See [ADR-014](../adrs/014-field-level-group-gating.md) and
+[ADR-015](../adrs/015-search-filter-bar.md).
+
+!!! note "A UX mirror on the frontend, not the security boundary"
+    `FieldDescriptor.groups` on the client only avoids rendering an empty slot for a field the
+    caller was never sent — the server-side omission above is what actually keeps the data from
+    leaving the backend.
 
 ---
 
@@ -473,6 +502,13 @@ type LogEntry struct {
     Err      error
 }
 ```
+
+!!! tip "Query-caller tracking"
+    Every `LogEntry` also carries the call site (`orm/log.Caller()` walks the stack past the ORM's
+    own frames) so a slow-query or error log line names the actual repository/service method that
+    issued it, not just "somewhere in the ORM." The same change quieted `orm.ErrNoRows` logging
+    (a normal, expected outcome for `FindOne`/`FindByID` misses) and trimmed stack traces attached
+    to error logs to the caller-relevant frames.
 
 ---
 

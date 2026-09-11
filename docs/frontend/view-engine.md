@@ -58,28 +58,45 @@ Every failure becomes an `ApiError { code, message, requestId, status }`. `parse
 A view is described by data, not code:
 
 ```ts
-type ViewType = 'form' | 'tree' | 'dashboard'
+type ViewType = 'form' | 'tree' | 'dashboard' | 'catalog'
 
 interface FieldDescriptor {
   name: string
   label: string
-  type: 'text' | 'number' | 'date' | 'relation' | 'boolean' | 'selection'
+  type: 'text' | 'number' | 'date' | 'relation' | 'boolean' | 'selection' | 'totals' | 'address'
   required?: boolean
-  widget?: string            // rendering hint, e.g. 'picture' | 'long'
+  widget?: string            // rendering hint, e.g. 'picture' | 'long' — see the widget matrix below
   states?: Condition         // declarative visible/readOnly/required
+  groups?: string[]          // UX mirror of a server-side field-group gate — see ADR-014
 }
 
 interface ViewDescriptor<T> {
-  entity: string            // maps to the Go route: 'crm' → /crm/
+  entity: string             // maps to the Go route: 'crm' → /crm/
   viewType: ViewType
   fields: FieldDescriptor[]
-  layout?: LayoutNode        // optional explicit layout tree — see below
-  extends?: ViewExtension    // optional inheritance from another module's view
+  layout?: LayoutNode         // optional explicit layout tree — see below
+  extends?: ViewExtension     // optional inheritance from another module's view
   permissions?: string[]
+  search?: SearchDescriptor   // list search/filter bar config — see ADR-015
+  actions?: MenuNode[]        // form options-menu tree — see ADR-012
+  headerButtons?: HeaderButtonDescriptor[] // always-visible workflow buttons — see ADR-012
+  statusBar?: string          // a selection field rendered as a status breadcrumb — see ADR-012
+  showChatter?: boolean       // per-record activity feed panel — see the Chatter Panel page
+  navLabel?: string           // label in the per-app top-bar header menu
+  hideFromTopBar?: boolean    // opt a route out of the auto-populated top-bar menu
+  listFilter?: Record<string, unknown> // a fixed filter baked into a route (e.g. a status-scoped sub-list)
+  catalog?: CatalogDescriptor  // icon/title/subtitle rows — 'catalog' viewType only
 }
 ```
 
 Adding an **entity** is a new descriptor. Adding a **view type** is one store factory + one renderer + one server loader path — and then every entity can use it.
+
+Every one of the descriptor blocks above is plain, RSC-safe **data**, validated once at
+`ModuleRegistry.register()` time — never a function, never inspected lazily at render — the same
+posture `extends`, `compute`, and `on_change` already take (see [View
+inheritance](#view-inheritance-extends) and [Computed & Reactive Fields](#computed-reactive-fields)
+below). See [Views & Components](views-and-components/index.md) for a practical, per-view-type and
+per-widget usage guide; this page stays the architectural reference.
 
 ---
 
@@ -109,9 +126,17 @@ Operations are data an interpreter walks (the same reasoning that keeps `compute
 
 ---
 
-## Runtime view settings (Kanban/Calendar)
+## Runtime view settings (Kanban/Calendar/Graph)
 
-Every `tree` view's display mode (`List | Kanban | Calendar | Graph`) is a workspace admin preference, not descriptor data — deliberately, so it can differ per workspace without a rebuild. Kanban's status column and Calendar's date field are stored in tenant-scoped `app_settings` (`views.<entity>.fields`, via `GET|PUT /api/v1/settings/views/:entity/fields`), never on the descriptor. The Settings → Views UI still *sources its choices* from the registered descriptor (only `type: 'selection'` fields are offered for Kanban, only `type: 'date'` fields for Calendar) — the descriptor owns what fields exist, `app_settings` owns which one a workspace picked. An entity with no configured field is a normal state (200 with nulls, not a 404); the mode switcher just disables that button until configured. See [ADR-007: Runtime-Configurable View Fields](../adrs/007-runtime-view-fields.md).
+Every `tree` view's display mode (`List | Kanban | Calendar | Graph`) is a workspace admin preference, not descriptor data — deliberately, so it can differ per workspace without a rebuild. Kanban's status column and Calendar's date field are stored in tenant-and-company-scoped `app_settings` (`views.<entity>.fields`, via `GET|PUT /api/v1/settings/views/:entity/fields`), never on the descriptor. Graph mode's tile layout is a sibling key, `views.<entity>.graph` (`GET|PUT /api/v1/settings/views/:entity/graph`) — see [Settings & Workspace Configuration](../core/settings.md) for both. The Settings → Views UI still *sources its choices* from the registered descriptor (only `type: 'selection'` fields are offered for Kanban, only `type: 'date'` fields for Calendar) — the descriptor owns what fields exist, `app_settings` owns which one a workspace picked. An entity with no configured field is a normal state (200 with nulls, not a 404); the mode switcher just disables that button until configured. See [ADR-007: Runtime-Configurable View Fields](../adrs/007-runtime-view-fields.md).
+
+A module can additionally declare `ViewModeDefaults.calendarColorField?: string` — a fixed,
+module-stated hint (not a workspace preference) naming a boolean field whose `true` value tints a
+Calendar card, e.g. [Cron](../core/cron.md) coloring a failed run's card red. See
+[ADR-017](../adrs/017-cron-scheduler.md).
+
+See [Views & Components](views-and-components/index.md) for a per-view-type walkthrough (List,
+Kanban, Calendar, Graph, Form, Catalog, Dashboard, Report) with real, shipped-module examples.
 
 ---
 
@@ -121,12 +146,17 @@ Every `tree` view's display mode (`List | Kanban | Calendar | Graph`) is a works
 
 | Type | Widgets (first = default) |
 |---|---|
-| `text` | `simple`, `long`, `phone`, `table` |
-| `number` | `float`, `int`, `percent`, `stars`, `phone` |
-| `boolean` | `switch`, `picture`, `signature` |
+| `text` | `simple`, `long`, `phone`, `table`, `color`, `url` |
+| `number` | `float`, `int`, `percent`, `stars`, `phone`, `monetary` |
+| `boolean` | `switch`, `picture`, `signature`, `file` |
 | `date` | `simple` |
-| `selection` | `select` |
-| `relation` | `search`, `tags`, `list` (one per [relation kind](#relation-widgets), not interchangeable) |
+| `selection` | `select`, `linked` (patches sibling fields per `widgetOptions.presets` — e.g. PDF page-format presets) |
+| `relation` | `search`, `tags`, `list` (one [default per relation kind](#relation-widgets)), plus `carousel` and `summary` overrides |
+| `totals` | `recap` — a live, computed recap of sibling relation lines (e.g. a sale quote's tax-rate breakdown); always `store: false` |
+| `address` | `form` — a composite widget owning seven sibling columns (`<name>_number\|complement\|street\|zip_code\|city\|state\|country`), with optional OpenStreetMap autocomplete (see [Settings → OpenStreetMap connector](../core/settings.md#openstreetmap-connector)) |
+
+See [Views & Components](views-and-components/index.md) for a one-page-per-widget usage guide with
+real examples from shipped modules.
 
 Dispatch is a flat lookup table keyed by `"<type>/<widget>"`, not a switch — adding a widget is one new table entry and one new component, never a branch to extend:
 
@@ -206,7 +236,20 @@ interface RelationDescriptor {
 }
 ```
 
-Each kind gets exactly one widget in v1 — `RELATION_KIND_WIDGETS = { many2one: 'search', one2many: 'list', many2many: 'tags' }` — validated at registration (an `o2m` without `inverseField`, or an `m2m` without `via`, fails fast naming the field). See [ORM → Relations](../core/orm.md#relations) for how these map to plain FK columns and junction tables on the Go side.
+Each kind gets exactly one **default** widget — `RELATION_KIND_WIDGETS = { many2one: 'search', one2many: 'list', many2many: 'tags' }` — validated at registration (an `o2m` without `inverseField`, or an `m2m` without `via`, fails fast naming the field). See [ORM → Relations](../core/orm.md#relations) for how these map to plain FK columns and junction tables on the Go side.
+
+Two `widget` overrides opt a relation field into a different presentation:
+
+- **`widget: 'carousel'`** (o2m) — a photo-gallery-style carousel over embedded rows each backed by
+  a `boolean/picture` field, e.g. `propertymanagement`'s Equipment "Photos."
+- **`widget: 'summary'`** (many2one) — an inline card summarizing the linked record instead of a
+  search box.
+
+Many-to-many resolution is **batched**, not per-row: `resolveManyToManyLinks` fetches a field's
+junction rows, then resolves every linked record in **one** call via `in[id]=<id1>,<id2>,...`
+(see [ORM → Query Parameters](../core/orm.md#query-parameters-generic-crud)) regardless of row
+count — the REST answer to the N+1 fan-out problem GraphQL is usually reached for. See
+[ADR-018](../adrs/018-http2-edge-rest-batching.md).
 
 ```ts
 { name: 'contact_id', label: 'Contact', type: 'relation',
@@ -286,9 +329,13 @@ See [Testing](../developer-guide/testing.md) for the backend equivalent.
 ## Related
 
 - [Frontend Overview](index.md) — the service, the BFF boundary, the three pillars.
+- [Views & Components](views-and-components/index.md) — a practical, per-view-type and per-widget usage guide.
 - [Module Discovery](module-discovery.md) — how a module's views reach the engine.
 - [Authentication (BFF)](authentication.md) — the refresh/session lifecycle the `ApiClient` relies on.
 - [ORM → Relations](../core/orm.md#relations) — the Go side of relation fields (FK columns, junction tables).
-- [Object Storage](../core/object-storage.md) — the service behind the picture/signature widgets.
+- [Object Storage](../core/object-storage.md) — the service behind the picture/signature/file widgets.
+- [Settings & Workspace Configuration](../core/settings.md) — Kanban/Calendar/Graph field config, OSM connector, tax mode.
 - [ADR-004](../adrs/004-csr-frontend.md) — why Next.js + Zustand.
 - [ADR-006](../adrs/006-view-inheritance.md) · [ADR-007](../adrs/007-runtime-view-fields.md) · [ADR-008](../adrs/008-form-anatomy.md) — view inheritance, runtime-configurable fields, and default form anatomy.
+- [ADR-012](../adrs/012-form-actions-menu.md) · [ADR-014](../adrs/014-field-level-group-gating.md) · [ADR-015](../adrs/015-search-filter-bar.md) · [ADR-016](../adrs/016-undo-toast.md) — form actions menu, field-level group gating, search/filter bar, undo toast.
+- [ADR-019](../adrs/019-per-model-view-files.md) — the one-file-per-DB-model convention a module's `views/` folder follows.

@@ -66,6 +66,11 @@ go run ./cmd/app/... -config="../../eerp-config.json"
 | `s3_bucket` | string | Bucket for picture/signature objects. Optional |
 | `s3_access_key` | string | S3 access key. Optional |
 | `s3_secret_key` | string | S3 secret key. Optional |
+| `pdf_service_url` | string | Base URL of the standalone `pdf-service` (headless Chromium). Required for report generation — see [Reports & PDF Generation](reports.md) |
+| `nats_url` | string | NATS server URL for horizontal `pdf-service` scaling via request-reply. Optional — synchronous HTTP is used when unset |
+| `frontend_base_url` | string | The `core-front` origin the backend navigates `pdf-service`'s headless browser to when rendering a report |
+| `cron_log_dir` | string | Local directory for [cron](cron.md) run logs. Defaults to `cron_logs`, resolved the same way as `module_root` |
+| `seed_dev_admin` | bool | Dev-only: seeds a default admin account at startup so there's something to log in with locally. Never set in production |
 
 !!! note "Object storage is all-or-nothing"
     The `/api/v1/pictures` routes only mount when **both** `s3_endpoint` and `s3_bucket` are set. Leaving all five `s3_*` fields empty is a valid configuration — picture/signature widgets are simply unavailable, not broken. See [Object Storage](object-storage.md).

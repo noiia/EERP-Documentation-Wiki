@@ -80,15 +80,20 @@ graph TD
 
 ## Module Dependency Access
 
-Modules (WASM) cannot directly call Go functions. The mechanism for providing modules with access to core services is via **WASM host imports** — Go functions registered in the Wasmtime linker that the Rust module calls as if they were local functions.
+A `"type": "wasm"` module (Go source cross-compiled to WASI — see [Module
+System](module-system.md), not Rust) cannot directly call Go functions running in the native core
+binary. The mechanism for providing such a module with access to core services is via **WASM host
+imports** — Go functions registered in the Wasmtime linker that the WASI-side Go code calls as if
+they were local functions.
 
 For example, if a module needs to read a configuration value:
 
 ```
-Rust module:
-    extern "C" { fn get_config(key_ptr: *const u8, key_len: usize) -> *const u8; }
+WASI-side module (//go:build wasip1):
+    //go:wasmimport env get_config
+    func getConfig(keyPtr *byte, keyLen uint32) *byte
 
-Go core registers:
+Native core registers:
     linker.FuncNew("env", "get_config", …, goFn)
 ```
 

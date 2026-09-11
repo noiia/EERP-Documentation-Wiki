@@ -12,12 +12,19 @@ EERP uses a **hybrid module model** with two distinct components per module:
 
 | Component | Runs when | Responsibility |
 |---|---|---|
-| WASM binary (Rust) | Startup only | Schema declaration via `migrate()` ABI |
+| WASM binary (optional) | Startup only | Schema declaration via `migrate()` ABI, for a module that sets `"type": "wasm"` |
 | Go service (monolith) | Every request | Business logic, ORM queries, HTTP handlers |
 
-The WASM boundary is crossed once per module per startup — not on each request. This gives sandboxed schema ownership without any per-request serialization cost.
+The WASM boundary, when used, is crossed once per module per startup — not on each request. This gives sandboxed schema ownership without any per-request serialization cost.
 
-> **Current state**: every shipped module is a pure Go service — the Wasmtime loader is live, but `.wasm` binaries are still the next step for full schema decoupling. `core/modules/` currently ships `crm` and `contact` (business entities), `appstore` (the module-management UI, see [Live Activation](#live-activation-no-restart)), `crminheritdemo` (a worked example of [extending another module's table](orm.md#extending-another-modules-table)), and three infrastructure-only modules with no `module.json` of their own — `auth`, `settings`, and `pictures`/`notebook` (record-anchored services, see [Object Storage](object-storage.md)) — all registered with the ORM but excluded from generic CRUD.
+!!! danger "The WASM binary is Go, not Rust"
+    Every module directory in this codebase is Go source. `make build` cross-compiles a module
+    that opts in (`"type": "wasm"` in its `module.json`) to WebAssembly System Interface (WASI)
+    via `GOOS=wasip1 GOARCH=wasm go build` — there is no Rust anywhere in this repository, despite
+    what earlier revisions of this page and [ADR-002](../adrs/002-wasm-modules.md) said. See [Module
+    Anatomy](#module-anatomy) below for what the two module shapes actually look like on disk.
+
+> **Current state**: every shipped module sets `"type": "go"` and is a pure Go service, self-registering via `module.RegisterGoModule` — the Wasmtime/WASI loader is live and fully exercised by the detector/loader/runtime code, but no shipped module currently uses the `"type": "wasm"` path. `core/modules/` currently ships `crm`, `contact`, `company`, `warehouse`, `sale`, `propertymanagement`, `reportlayout`, and `cron` (business entities and services), `appstore` (the module-management UI, see [Live Activation](#live-activation-no-restart)), `crminheritdemo` (a worked example of [extending another module's table](orm.md#extending-another-modules-table)), and several infrastructure-only modules with no `module.json` of their own — `auth`, `settings`, `pictures`/`attachments` (see [Object Storage](object-storage.md)), and `chatter`/`notebook`/`savedfilter` (see [Record-Anchored Services](record-anchored-services.md)) — all registered with the ORM but excluded from generic CRUD.
 
 !!! note "How a Go module gets wired in"
     `core/modules/all` is a small `//go:build !wasip1` package that blank-imports every other Go module so each one's `init()` fires and self-registers via `module.RegisterGoModule`. It is the one file that changes when a new Go-only module is added to the tree — everything else (discovery, dependency ordering, HTTP wiring) proceeds from that registration exactly as it does for a WASM module.
@@ -37,24 +44,25 @@ The WASM boundary is crossed once per module per startup — not on each request
 
 ## Module Anatomy
 
-A full hybrid module contains:
+A full hybrid module (`"type": "wasm"`) contains:
 
 ```
 modules/crm/
 ├── module.json           # Module metadata and dependency declaration
-├── crm.wasm              # Compiled Rust binary (WASM schema protocol)
-├── src/                  # Rust source (not read by core)
-│   └── lib.rs            # migrate() + migrate_len() exports
-└── internal/             # Go source (compiled into core binary)
+├── build/
+│   └── crm.wasm          # Go source cross-compiled to WASI (GOOS=wasip1 GOARCH=wasm)
+├── migrate_wasm.go        # migrate() + migrate_len() exports (built into build/crm.wasm)
+└── internal/             # Go source (compiled into the native core binary)
     ├── crm.go            # Contact entity + Service (business logic)
     └── handlers.go       # HTTP handlers (future)
 ```
 
-A Go-only module (current approach) omits the `src/` and `.wasm` parts:
+A Go-only module (the current, standard approach — `"type": "go"`) omits the WASM build entirely:
 
 ```
 modules/crm/
 ├── module.json
+├── module.go             # init() → module.RegisterGoModule; Register() → orm.Register[T]
 └── internal/
     └── crm.go
 ```
@@ -183,13 +191,22 @@ sequenceDiagram
 
 ## Migration Protocol
 
-Modules communicate schema requirements through a simple memory-based protocol. This avoids a direct Go/Rust dependency; the only shared contract is the JSON shape.
+Modules communicate schema requirements through a simple memory-based protocol. Only relevant to a
+`"type": "wasm"` module — the only shared contract between the WASI binary and the core is the JSON
+shape below, not a Go package dependency.
 
-### Module side (Rust)
+### Module side (Go, cross-compiled to WASI)
 
-```rust
-// The migration definition, returned as JSON in linear memory
-static MIGRATION: &str = r#"{
+This file is only included in the `GOOS=wasip1 GOARCH=wasm go build` that produces the module's
+`.wasm` artifact — it is never compiled into the native core binary.
+
+```go
+//go:build wasip1
+
+package main
+
+// The migration definition, returned as JSON in linear memory.
+const migration = `{
     "entity": "contacts",
     "version": 1,
     "operations": [
@@ -201,20 +218,22 @@ static MIGRATION: &str = r#"{
             "nullable": true
         }
     ]
-}"#;
+}`
 
-#[no_mangle]
-pub extern "C" fn migrate() -> *const u8 {
-    MIGRATION.as_ptr()
+//export migrate
+func migrate() *byte {
+    return &[]byte(migration)[0]
 }
 
-#[no_mangle]
-pub extern "C" fn migrate_len() -> usize {
-    MIGRATION.len()
+//export migrate_len
+func migrateLen() uint32 {
+    return uint32(len(migration))
 }
+
+func main() {} // required by GOOS=wasip1, unused
 ```
 
-### Core side (Go)
+### Core side (native Go binary)
 
 ```go
 // core/internal/types/modules.go
@@ -239,9 +258,10 @@ The core reads the WASM linear memory region indicated by the pointer and length
 
 | Operation | DDL Generated |
 |---|---|
-| `add_column` | `ALTER TABLE t ADD COLUMN IF NOT EXISTS col TYPE` |
+| `add_column` | `ALTER TABLE t ADD COLUMN IF NOT EXISTS col TYPE` (optionally with `"index": true`/`"index_type"` — see [ORM → Indexes](orm.md#indexes)) |
+| `create_index` | `CREATE INDEX IF NOT EXISTS idx_<table>_<column> ON t USING <method> (col)` |
 
-Future operations planned: `drop_column`, `add_index`, `create_table`, `rename_column`.
+Future operations planned: `drop_column`, `create_table`, `rename_column`. Note this table describes the WASM/JSON migration protocol specifically — the standard `"type": "go"` path doesn't go through it at all; see [Server Integration → Startup migration flow](../development/server-integration.md#startup-migration-flow) for how a Go module's schema is actually derived.
 
 ---
 
@@ -306,10 +326,10 @@ graph LR
 | Extension | Mechanism |
 |---|---|
 | New operation type | Add case to `Operation.Type` handler in `load.go` |
-| New WASM export | Export function from Rust, call from `load.go` |
+| New WASM export | Export function from the module's own Go source (built with `GOOS=wasip1`), call from `load.go` |
 | Hot reload | **Shipped** — see [Live Activation](#live-activation-no-restart) below |
 | Module isolation | Per-module Wasmtime `Store` (shipped, see below); resource limits remain future work |
-| Module API | Future: Go functions linked into WASM linker, called from Rust via imports |
+| Module API | Future: Go functions linked into the WASM linker, called from a module's WASI-side Go code via imports |
 
 ---
 

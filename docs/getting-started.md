@@ -8,17 +8,17 @@ This guide walks you through running EERP locally and making your first change.
 
 | Tool | Minimum version | Purpose |
 |---|---|---|
-| Go | 1.26 | Backend runtime |
-| Rust | stable + `wasm32-unknown-unknown` target | WASM module compilation |
+| Go | 1.26 | Backend runtime, and module WASM cross-compilation (see note below) |
 | Docker / Docker Compose | v2 | PostgreSQL dev database + Garage (object storage) |
 | Node.js | 20+ | Next.js front server (dev and prod runtime) |
 | Make | any | Developer task runner |
 
-Install the Rust WASM target once:
-
-```bash
-rustup target add wasm32-unknown-unknown
-```
+!!! note "No Rust toolchain needed"
+    Module WASM binaries are **Go source cross-compiled to WASI** (`GOOS=wasip1 GOARCH=wasm go
+    build`), not Rust — see [Module System](core/module-system.md#module-anatomy). You only
+    need the Go toolchain already listed above. In practice you won't even need that: every
+    module shipped today has `"type": "go"` in its `module.json`, so it compiles straight into
+    the core binary and the WASM build step never runs for it.
 
 ---
 
@@ -91,15 +91,21 @@ make run-front
 
 ---
 
-## Build WASM Modules
+## Build WASM Modules (optional)
 
-WASM modules are Rust crates compiled to `wasm32-unknown-unknown`. To build all modules:
+A module opts into the WASM-loaded path by setting `"type": "wasm"` in its `module.json`; the core
+cross-compiles it — Go source, not Rust — to WebAssembly System Interface (WASI) via `GOOS=wasip1
+GOARCH=wasm go build`. To build every such module:
 
 ```bash
 make build
 ```
 
-The compiled `.wasm` binaries are placed into the module directories. The module loader auto-discovers them on startup.
+The compiled `.wasm` binaries are placed into the module directories, and the module loader
+auto-discovers them on startup. **You can skip this step entirely for local development**: every
+module shipped in this repository today has `"type": "go"`, compiles straight into the core
+binary, and never touches the WASM path. See [Module System → The WASM/WASI
+path](core/module-system.md#module-anatomy) for when you'd actually reach for `"type": "wasm"`.
 
 ---
 
@@ -165,5 +171,5 @@ make run-back-tests BACKTESTPATH=./orm/... ARGS="-run TestFindOne"
 ## Next Steps
 
 - Read [Architecture Overview](architecture/index.md) to understand how the layers relate.
-- Read [Creating a Module](developer-guide/creating-a-module.md) to build your first WASM module.
+- Read [Building a Module From Scratch](developer-guide/module-from-scratch.md) to scaffold and wire up your first module end to end.
 - Read [ORM](core/orm.md) to understand how to work with the database.

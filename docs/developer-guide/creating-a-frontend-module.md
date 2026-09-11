@@ -108,7 +108,7 @@ What you did **not** write: no data fetching (the server loader does it, cached 
 
 Need a view type that doesn't exist yet? That is one store factory + one renderer + one server loader path in `@eerp/core-front` — added once, available to every entity.
 
-Every `tree` view also gets a **display-mode** switcher (`List | Kanban | Calendar | Graph`) for free — no descriptor changes required. Which field backs Kanban's columns or Calendar's dates is a workspace admin setting made later from Settings → Views, not something a module declares. See [View Engine → Runtime view settings](../frontend/view-engine.md#runtime-view-settings-kanbancalendar).
+Every `tree` view also gets a **display-mode** switcher (`List | Kanban | Calendar | Graph`) for free — no descriptor changes required. Which field backs Kanban's columns or Calendar's dates is a workspace admin setting made later from Settings → Views, not something a module declares. See [View Engine → Runtime view settings](../frontend/view-engine.md#runtime-view-settings-kanbancalendargraph).
 
 ---
 

@@ -2,6 +2,13 @@
 
 An entity is a Go struct that maps to a database table. This guide covers everything from defining the struct to querying it with the full power of the ORM.
 
+!!! note "This is the data-model half of a module"
+    Defining an entity and calling `orm.Register[T]()` from a module's `Register()` method is what
+    makes the table exist, migrate, and (unless excluded) get a full generic CRUD HTTP surface — see
+    [Creating a Go Module → Step 4](creating-a-go-module.md#step-4-self-register-with-modulego) for
+    how this struct plugs into a module's self-registration, and [Server
+    Integration](../development/server-integration.md) for what happens at startup once it does.
+
 ---
 
 ## What Makes an Entity
@@ -57,7 +64,15 @@ type Invoice struct {
 | `db:"col,pk"` | Treat as primary key |
 | `db:"col,omitempty"` | Skip on INSERT/UPDATE when value is zero |
 | `db:"col,softdelete"` | This column is the soft-delete timestamp |
+| `db:"col,index"` / `db:"col,index=<method>"` | Secondary index, created idempotently at startup — see [ORM → Indexes](../core/orm.md#indexes) |
 | `db:"-"` | Never include in any query |
+
+!!! tip "Field-level visibility and gating"
+    Struct tags control column mapping, not who gets to see a field over the API. To restrict a
+    column to callers in specific groups (an Odoo-style security group, e.g. hiding `salary_cents`
+    from everyone but `hr_manager`), pass `orm.WithFieldGroups(...)` at registration instead — see
+    [ORM → API Exposure vs. Registration](../core/orm.md#api-exposure-vs-registration) and
+    [ADR-014](../adrs/014-field-level-group-gating.md).
 
 ---
 

@@ -1,23 +1,31 @@
-# Creating a Module (WASM / Rust Path)
+# Creating a Module (WASM/WASI Path)
 
-!!! info "Two paths available"
-    EERP supports two module implementation strategies:
+!!! danger "This is a Go path, not Rust — and it's rarely the right one"
+    Older revisions of this guide (and of the wider EERP docs) described this as a **Rust**
+    toolchain compiling to `wasm32-unknown-unknown`. That subsystem never existed in the
+    repository. The real mechanism: a module opting into `"type": "wasm"` is **Go source**,
+    cross-compiled to WebAssembly System Interface (WASI) via `GOOS=wasip1 GOARCH=wasm go build`.
+    See [ADR-002](../adrs/002-wasm-modules.md) for the corrected decision record.
 
-    - **WASM / Rust** (this guide) — Rust crate compiles to `.wasm`; the core calls `migrate()` at startup for sandboxed schema declaration. Business logic lives in a companion Go service.
-    - **Go monolith** ([Creating a Go Module](creating-a-go-module.md)) — schema declared in Go; all logic compiled directly into the core binary. This is the current approach for all shipped modules.
+    **Every module shipped in EERP today uses `"type": "go"` instead** (see [Creating a Go
+    Module](creating-a-go-module.md) and, for the fastest start,
+    [Building a Module From Scratch](module-from-scratch.md)). The WASM/WASI path documented here
+    is fully implemented and exercised by the detector/loader/runtime code, but no production
+    module currently uses it. Reach for it only when you specifically need a module's schema
+    declaration sandboxed and loadable without rebuilding the core binary — not as the default way
+    to start a new module.
 
-    You can mix both: use the WASM path for schema isolation and the Go service for business logic in the same module.
-
-This guide walks you through the WASM path using `hr` (Human Resources) as a running example.
+This guide walks through the WASM/WASI path using `hr` (Human Resources) as a running example, for
+when that isolation genuinely matters.
 
 ---
 
 ## Before You Start
 
-The WASM component is a Rust crate that compiles to WebAssembly. You need:
+The WASM component is a second build target of the **same Go source tree** — not a separate
+language or toolchain. You need:
 
-- Rust stable toolchain
-- `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`
+- Go 1.26+ (the only toolchain required — no Rust, no `wasm32-unknown-unknown` target)
 - A directory inside one of the paths listed in `module_root` in `eerp-config.json`
 
 ---
@@ -25,7 +33,14 @@ The WASM component is a Rust crate that compiles to WebAssembly. You need:
 ## Step 1: Create the Module Directory
 
 ```bash
-mkdir -p modules/hr/src
+mkdir -p modules/hr
+```
+
+Or scaffold it directly with the module-generator tool (recommended even for the WASM/WASI path —
+see [Building a Module From Scratch](module-from-scratch.md)):
+
+```bash
+go run ./tools/eerp-init-module -p core/modules/hr -t wasm
 ```
 
 ---
@@ -35,6 +50,7 @@ mkdir -p modules/hr/src
 ```json
 {
     "active": true,
+    "type": "wasm",
     "name": "hr",
     "display_name": "Human Resources",
     "version": "0.1.0",
@@ -50,108 +66,73 @@ mkdir -p modules/hr/src
 
 **Checklist:**
 
+- [ ] `type` is `"wasm"` — this is the field that decides the module compiles to a WASI binary loaded at runtime, instead of straight into the core (see [Module System → The WASM binary is Go, not Rust](../core/module-system.md))
 - [ ] `name` is unique across all modules in `module_root`
 - [ ] `depends` lists the `name` values of any modules that must load before this one
 - [ ] `active: true` to enable on startup
 
 ---
 
-## Step 3: Initialize the Rust Crate
+## Step 3: Declare the Database Schema
 
-```bash
-cd modules/hr
-cargo init --lib
-```
+A `"type": "wasm"` module communicates its schema requirements via the migration protocol — a Go
+file built only into the WASI binary, guarded by a build tag so it never lands in the native core
+binary:
 
-Edit `Cargo.toml`:
+```go
+// migrate_wasm.go
+//go:build wasip1
 
-```toml
-[package]
-name = "hr"
-version = "0.1.0"
-edition = "2021"
+package main
 
-[lib]
-crate-type = ["cdylib"]   # Required: produces a .wasm file
-
-[profile.release]
-opt-level = "s"           # Optimize for size
-lto = true
-```
-
----
-
-## Step 4: Declare the Database Schema
-
-Every module communicates its schema requirements via the migration protocol. Define the JSON as a static string:
-
-```rust
-// src/lib.rs
-
-static MIGRATION: &str = r#"{
+// The migration definition, returned as JSON in linear memory.
+const migration = `{
     "entity": "employees",
     "version": 1,
     "operations": [
-        {
-            "type": "add_column",
-            "table": "employees",
-            "column": "department",
-            "sql_type": "VARCHAR(128)",
-            "nullable": false
-        },
-        {
-            "type": "add_column",
-            "table": "employees",
-            "column": "start_date",
-            "sql_type": "DATE",
-            "nullable": false
-        },
-        {
-            "type": "add_column",
-            "table": "employees",
-            "column": "salary_cents",
-            "sql_type": "BIGINT",
-            "nullable": false
-        },
-        {
-            "type": "add_column",
-            "table": "employees",
-            "column": "status",
-            "sql_type": "VARCHAR(32)",
-            "nullable": false
-        }
+        { "type": "add_column", "table": "employees", "column": "department",   "sql_type": "VARCHAR(128)", "nullable": false },
+        { "type": "add_column", "table": "employees", "column": "start_date",   "sql_type": "DATE",         "nullable": false },
+        { "type": "add_column", "table": "employees", "column": "salary_cents", "sql_type": "BIGINT",       "nullable": false },
+        { "type": "add_column", "table": "employees", "column": "status",       "sql_type": "VARCHAR(32)",  "nullable": false }
     ]
-}"#;
+}`
 
-#[no_mangle]
-pub extern "C" fn migrate() -> *const u8 {
-    MIGRATION.as_ptr()
+//export migrate
+func migrate() *byte {
+    return &[]byte(migration)[0]
 }
 
-#[no_mangle]
-pub extern "C" fn migrate_len() -> usize {
-    MIGRATION.len()
+//export migrate_len
+func migrateLen() uint32 {
+    return uint32(len(migration))
 }
+
+func main() {} // required entrypoint for GOOS=wasip1, unused
 ```
 
-!!! warning "Tables are not auto-created"
-    The migration protocol currently only supports `add_column`. The base table (`employees`) must exist or be created via a future `create_table` operation. For now, the entity's base table is created by the Go-side repository when `MustRepo` is first called (this behaviour is under active development).
+!!! warning "Tables are not auto-created by this protocol"
+    The WASM/JSON migration protocol currently only supports `add_column` and `create_index` (see
+    [Module System → Supported Operations](../core/module-system.md#migration-protocol)). The base
+    table must already exist. In practice, every module that needs a new table uses the `"type":
+    "go"` path instead, where `orm.Register[T]` derives `CREATE TABLE IF NOT EXISTS` automatically
+    — see [Creating a Go Module](creating-a-go-module.md#step-4-self-register-with-modulego).
 
 ---
 
-## Step 5: Implement Business Logic
+## Step 4: Implement Business Logic
 
-Business logic runs in Go inside the module's service struct — compiled directly into the core binary. See [Creating a Go Module](creating-a-go-module.md) for the full Go service guide. Below is the companion Go code that pairs with the WASM schema above.
+Business logic still runs as ordinary Go, compiled into the core binary — the WASM/WASI split only
+affects schema declaration, never request handling. See [Creating a Go
+Module](creating-a-go-module.md) for the full service-layer guide. The native-side files (built
+without the `wasip1` tag) live alongside the WASM-only file from Step 3:
 
 ```
 modules/hr/
 ├── module.json
-├── Cargo.toml
-├── src/
-│   └── lib.rs           # Rust → WASM (schema declaration only)
+├── migrate_wasm.go      # //go:build wasip1 — schema declaration only, built into build/hr.wasm
 └── internal/
-    ├── employee.go      # Entity definition
-    └── service.go       # Business logic (compiled into core)
+    ├── employee.go      # Entity definition (native build)
+    └── service.go       # Business logic (native build, compiled into core)
 ```
 
 **`internal/employee.go`:**
@@ -175,78 +156,20 @@ type Employee struct {
 func (Employee) TableName() string { return "employees" }
 ```
 
-**`internal/service.go`:**
-
-```go
-package hr
-
-import (
-    "context"
-    "errors"
-    "eerp/core/orm"
-    "github.com/google/uuid"
-)
-
-var ErrEmployeeNotFound = errors.New("employee not found")
-
-type Service struct {
-    employees *orm.Repository[Employee]
-    db        *orm.DB
-}
-
-func New(db *orm.DB) *Service {
-    return &Service{
-        employees: orm.MustRepo[Employee](db),
-        db:        db,
-    }
-}
-
-func (s *Service) Hire(ctx context.Context, e Employee) (Employee, error) {
-    e.Status = "active"
-    return s.employees.Create(ctx, e)
-}
-
-func (s *Service) Terminate(ctx context.Context, id uuid.UUID) (Employee, error) {
-    var result Employee
-    err := orm.Transact(ctx, s.db, func(tx *orm.Tx) error {
-        txEmp := s.employees.WithTx(tx)
-        emp, err := txEmp.FindByID(ctx, id)
-        if errors.Is(err, orm.ErrNotFound) {
-            return ErrEmployeeNotFound
-        }
-        if err != nil { return err }
-        emp.Status = "terminated"
-        result, err = txEmp.Update(ctx, emp, id)
-        return err
-    })
-    return result, err
-}
-
-func (s *Service) ListByDepartment(ctx context.Context, dept string) ([]Employee, error) {
-    return s.employees.Query().
-        Where(orm.Cond("department = $1", dept)).
-        Where(orm.Cond("status = $1", "active")).
-        OrderBy("start_date ASC").
-        All(ctx, s.db)
-}
-```
+**`internal/service.go`** — identical in shape to the Go-module path; see [Creating a Go
+Module](creating-a-go-module.md#step-5-implement-business-logic) for the full pattern
+(repository, transactions, query builder).
 
 ---
 
-## Step 6: Compile the WASM Binary
+## Step 5: Compile the WASM Binary
 
 ```bash
 cd modules/hr
-cargo build --target wasm32-unknown-unknown --release
+GOOS=wasip1 GOARCH=wasm go build -o build/hr.wasm .
 ```
 
-The output binary will be at:
-
-```
-target/wasm32-unknown-unknown/release/hr.wasm
-```
-
-Or use the top-level Makefile:
+Or use the top-level Makefile, which does this for every `"type": "wasm"` module:
 
 ```bash
 make build
@@ -254,22 +177,18 @@ make build
 
 ---
 
-## Step 7: Register with the Core
+## Step 6: Register with the Core
 
-At startup, the module loader scans `module_root` and auto-discovers `hr.wasm` next to `module.json`. No explicit registration is needed.
+At startup, the module loader scans `module_root` and auto-discovers `build/hr.wasm` next to
+`module.json`. No explicit registration is needed for the schema side — the loader calls
+`migrate()`/`migrate_len()` in the Wasmtime sandbox automatically.
 
-To wire the Go service into the application, add to `cmd/app/main.go` (until a formal DI container exists):
-
-```go
-hrService := hr.New(db)
-_ = hrService  // will be passed to HTTP handlers once the router is implemented
-```
+The native business-logic side wires in exactly as it would for a `"type": "go"` module — see
+[Server Integration](../development/server-integration.md).
 
 ---
 
-## Step 8: Verify Module Loading
-
-Run the backend and look for the module loader's log output:
+## Step 7: Verify Module Loading
 
 ```bash
 make run-back
@@ -287,41 +206,28 @@ INFO  module loaded    {"name": "hr"}
 
 ## Dependency Ordering
 
-If your module depends on another (e.g., `hr` needs `auth` to be loaded first):
-
-```json
-{
-    "name": "hr",
-    "depends": ["auth"]
-}
-```
-
-The detector will assign `hr` a higher priority than `auth`, ensuring `auth` loads and migrates first.
-
-```mermaid
-graph LR
-    auth["auth\n(priority 0)"] --> hr["hr\n(priority 1)"]
-    auth --> crm["crm\n(priority 1)"]
-```
+Dependency resolution works identically to the Go-only path — declare `depends` in `module.json`
+and the detector assigns priority via topological sort. See [Creating a Go
+Module](creating-a-go-module.md#dependency-ordering).
 
 ---
 
 ## Module Checklist
 
-**WASM component (Rust):**
+**WASM/WASI component (Go, cross-compiled):**
 
-- [ ] `module.json` present with unique `name`
-- [ ] Rust crate with `crate-type = ["cdylib"]`
-- [ ] `migrate()` and `migrate_len()` exported from Rust
+- [ ] `module.json` present with unique `name` and `"type": "wasm"`
+- [ ] Schema-declaring file guarded by `//go:build wasip1`
+- [ ] `migrate()` and `migrate_len()` exported
 - [ ] Migration JSON is valid (operations reference correct table names)
-- [ ] `.wasm` binary placed in the module directory (auto-discovered by core)
+- [ ] `.wasm` binary built into `build/<name>.wasm` (auto-discovered by core)
 
-**Go service component:**
+**Native business-logic component:**
 
 - [ ] Go entity embeds `model.BaseModel`
 - [ ] Go entity has `db` struct tags or snake_case field names
 - [ ] `Service.New(db)` constructor wires repositories
-- [ ] Service registered in `cmd/app/main.go`
 - [ ] Module appears in startup logs without errors
 
-See [Creating a Go Module](creating-a-go-module.md) for the Go-only path without a WASM binary.
+See [Creating a Go Module](creating-a-go-module.md) for the standard, recommended path — omitting
+the WASM/WASI split entirely.
