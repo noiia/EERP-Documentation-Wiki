@@ -1,5 +1,5 @@
 # ── Stage 1: build ──────────────────────────────────────────────────────────
-FROM python:3.13-alpine AS builder
+FROM python:3.14-alpine AS builder
 
 WORKDIR /build
 
@@ -12,7 +12,7 @@ COPY docs/ docs/
 RUN mkdocs build --strict
 
 # ── Stage 2: serve ──────────────────────────────────────────────────────────
-FROM nginx:1.31.1-alpine
+FROM nginx:1.31.2-alpine
 
 COPY --from=builder /build/site /usr/share/nginx/html
 

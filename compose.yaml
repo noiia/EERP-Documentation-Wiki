@@ -3,7 +3,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: eerp-docs:latest
+    # Published by .github/workflows/build-and-push.yml on every push to main.
+    # With both `build` and `image` set: `docker compose up --build` (local dev)
+    # builds from source and tags it as this image; `docker compose pull` (the
+    # deploy server, see deploy.sh) fetches the CI-published one instead of
+    # building locally.
+    image: ghcr.io/noiia/eerp-docs:latest
     restart: unless-stopped
     ports:
       - "9080:80"
