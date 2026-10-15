@@ -21,6 +21,25 @@ one per relation kind, plus two overrides.
   relation: { entity: 'tag', kind: 'many2many', via: 'crm_tag', labelField: 'name' } },
 ```
 
+## Options worth knowing
+
+| Option | Kind | Effect |
+|---|---|---|
+| `relation.filter: { col: value }` | m2o, m2m | static server-side scope on every search/prefill — the picker only ever offers matching rows |
+| `relation.formPath: '/x/:id'` | o2m | clicking a row opens that record's own form |
+| `relation.inside: { field, zone }` | o2m | instead of `inverseField`: the records whose point lies in this record's zone ([Geographic Widgets](geo-widgets.md)) |
+| `widgetOptions.fillFields: { col: field }` | m2o | picking a record copies its columns into sibling fields (e.g. an invoice's bill-to snapshot) — no extra fetch |
+| `widgetOptions.deletable` | o2m | a trash column; the row disappears only once Go confirms the delete |
+| `widgetOptions.reverse` | o2m | newest first (`order=-created_at`) |
+
+### Paged one-to-many grids
+
+When the host binds `RelationOps.listPage` (the shell does), the embedded o2m grid is
+**server-paged**: one request per page, sorted by `created_at` so pages are stable, 10 rows by
+default; a rows-per-page selector (25/50/100) appears once the linked rows don't fit. Deleting a
+row reloads the page so it refills. Without `listPage` it loads the first 100 rows once. A wide
+grid scrolls horizontally inside its own box.
+
 ## Create-from-search
 
 The `many2one` search widget's dropdown appends a synthetic "+ Create new" option after its (max 6)

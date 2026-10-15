@@ -26,7 +26,6 @@ different reasons. See [Record-Anchored Services](record-anchored-services.md) f
 // core/internal/settings — table: app_settings
 type AppSetting struct {
     model.BaseModel
-    TenantID  uuid.UUID `db:"tenant_id"`
     CompanyID uuid.UUID `db:"company_id"`
     Key       string    `db:"key"`
     Value     []byte    `db:"value"` // opaque JSON, shape owned by the key's own handler
@@ -40,23 +39,45 @@ different value per company within one tenant.
 
 ## Settings keys and their endpoints
 
-| Key | Endpoint | Permission | Shape |
+Most keys are **per company** (the caller's active company). A few describe the whole tenant and
+live in the tenant-wide slot (`company_id = uuid.Nil`) — marked *tenant* below. Every
+`/api/v1/settings/...` permission is derived from the route (`settings:<area>:read|write`).
+
+| Key | Endpoint | Scope | Shape |
 |---|---|---|---|
-| `i18n.default_locale` | `PUT /api/v1/settings/i18n` | `settings:i18n:write` | Workspace default language |
-| `format.number` | `PUT /api/v1/settings/format` | `settings:format:write` | Workspace number format (decimal/thousands separators) |
-| `views.<entity>.fields` | `GET\|PUT /api/v1/settings/views/:entity/fields` | `settings:views:read`/`write` | Which field is that entity's Kanban status column / Calendar date field — see [ADR-006](../adrs/006-view-inheritance.md)'s sibling, [ADR-007: Runtime-Configurable View Fields](../adrs/007-runtime-view-fields.md) |
-| `views.<entity>.graph` | `GET\|PUT /api/v1/settings/views/:entity/graph` | `settings:views:read`/`write` | An entity's Graph-mode tile layout (id, geometry, closed type set per tile) |
-| `integrations.osm` | `GET\|PUT /api/v1/settings/integrations/osm` | `settings:integrations:read`/`write` | `{enabled, base_url, user_agent}` for the OpenStreetMap/Nominatim connector backing the [Address widget](../frontend/views-and-components/address-widget.md) |
-| `tax.price_mode` | `GET\|PUT /api/v1/settings/tax` | `settings:tax:read`/`write` | `{price_mode: "tax_excluded" \| "tax_included"}` |
+| `i18n.default_locale` | `PUT /settings/i18n` | company | workspace default language |
+| `format.number` | `PUT /settings/format` | company | decimal / thousands separators |
+| `units.system` | `GET\|PUT /settings/units` | company | `{system: "metric" \| "imperial"}`, absent = metric (`ResolveUnitSystem`) |
+| `tax.price_mode` | `GET\|PUT /settings/tax` | company | `{price_mode: "tax_excluded" \| "tax_included"}` (`ResolveTaxIncluded`) |
+| `accounts.username_at_format` | `GET\|PUT /settings/accounts` | company | `{username_at_format: bool}` — display usernames as `@handle` |
+| `views.<entity>.fields` | `GET\|PUT /settings/views/:entity/fields` | company | Kanban status field, Calendar date field, `enable_graphs` ([ADR-007](../adrs/007-runtime-view-fields.md)) |
+| `views.<entity>.graph` | `GET\|PUT /settings/views/:entity/graph` | company | Graph-mode tile layout (shape validated, `config` opaque) |
+| `views.<entity>.chatter` | `GET\|PUT /settings/views/:entity/chatter` | company | `{enabled: bool \| null}` — override the form chatter panel; null = the descriptor's `showChatter` |
+| `widgets.picture_size`, `apps.<module>.widgets.picture_size` | `GET\|PUT /settings/apps/:module/picture-size` (`base` = workspace default) | company | `{width, height}` 16–2000 px; a module's value overrides the base one |
+| `reports.layout` | `GET\|PUT /settings/reports/layout` | company | `{footer, address}` letterhead stamped on every PDF ([Reports](reports.md)) |
+| `integrations.osm` | `GET\|PUT /settings/integrations/osm` | company | `{enabled, base_url, user_agent}` OpenStreetMap/Nominatim connector |
+| `integrations.stripe` | `GET\|PUT /settings/integrations/stripe` | tenant | Stripe keys, write-only ([Payments](payments.md)) |
+| `auth.methods` | `GET\|PUT /settings/auth`, `POST /settings/auth/test` | tenant | LDAP / OIDC sign-in ([External Sign-In](external-auth.md)) |
+| `events.settings` | `GET\|PUT /settings/events` | tenant | `{reminder_hours, waitlist_claim_hours}` ([Events](events.md)) |
+| `website.routing` | `GET\|PUT /settings/website/routing` | tenant | path or host mode ([Website](website.md#routing-path-or-host-mode)) |
+| `website.public.<table>` | `GET /settings/website/public`, `PUT …/:table` | tenant | published fields + forced filter ([Website](website.md#public-read-scope)) |
+| `website.legal`, `website.security`, `website.robots` | `GET\|PUT /settings/website/{legal,security,robots}` | tenant | site files ([Website](website.md#site-files)) |
+| mail templates (own table `mail_template`) | `GET /settings/mail_templates`, `PUT\|DELETE …/:key/:locale` | tenant | email overrides ([Mail](mail.md)) |
+| `dev.seed.full.<group>` | written by `POST /dev_seed` | tenant | full-seed markers ([Demo Data](demo-data.md)) |
 
 Plus one self-service, JWT-scoped endpoint outside the tenant-admin set: `GET/PUT
-/api/v1/me/preferences` — the caller's own `preferred_locale` and (since multi-company)
-`active_company_id`.
+/api/v1/me/preferences` — the caller's own `preferred_locale` and `active_company_id`; its GET
+also returns the resolved workspace values the UI mirrors (number format, active company and its
+currency, unit system).
 
 Every `GET` on an unconfigured key reads as its documented zero value (an empty canvas for
 `views.<entity>.graph`, `tax_excluded` for `tax.price_mode`, a disabled connector for
 `integrations.osm`) — **not a 404**. An unconfigured setting is a normal state a fresh workspace
 starts in, not an error condition.
+
+!!! warning "Tenant-wide keys in a multi-tenant database"
+    Tenant-wide keys are written under the admin's tenant. The website reads the **site tenant**
+    — publish and configure the site while signed in to it.
 
 ## Tax pricing mode
 
@@ -97,7 +118,7 @@ default company's settings — nothing resets. Creating a second company is a on
 
 ```mermaid
 graph LR
-    Handler["Settings handler\n(i18n / format / views / osm / tax)"] -->|resolves| Company["companies.ResolveActive"]
+    Handler["Settings handler\n(i18n / format / views / units / tax / …)"] -->|resolves| Company["companies.ResolveActive"]
     Handler -->|Get/Set with companyID| Repo["settings.Repository"]
     Repo -->|unique on tenant+company+key| DB[("app_settings")]
     OSMProxy["Next BFF osm/search route"] -->|reads| Handler

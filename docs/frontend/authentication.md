@@ -36,7 +36,7 @@ The server resolves `Identity` from the cookie in `apps/shell/src/lib/session.ts
 
 | Token | TTL | Rule |
 |---|---|---|
-| Access | **1 hour** | attached to Go calls by the server |
+| Access | **6 hours** in every shipped config (1 h if unset) | attached to Go calls by the server; the cookie's `maxAge` follows Go's `expires_in` |
 | Refresh | **7 days** | **single-use** (rotation) |
 
 A refresh token is spent the moment it is used; reusing a spent refresh is treated as **theft**: Go kills the session, Next clears the cookie, and the user is redirected to `/login`. These TTLs come from `eerp-config.json` (`access_ttl_seconds`, `refresh_ttl_seconds`).
@@ -73,15 +73,53 @@ sequenceDiagram
     N-->>B: HTML
 ```
 
-The refresh+retry is driven by the engine's `ApiClient`: a single in-flight refresh promise serializes concurrent `401`s so the single-use refresh token is never spent twice. On refresh failure the client clears the cookie and signals session-expired; callers redirect to `/login`. See [View Engine → ApiClient](view-engine.md#apiclient-the-bff-data-client).
+Refresh happens in two layers, because Next forbids writing cookies during a Server Component
+render and Go's refresh token is single-use (a refresh that can't persist its rotated cookie would
+silently spend the token):
+
+1. **`apps/shell/proxy.ts`** (Next's middleware file) runs before every request and rotates the
+   session proactively whenever the access cookie is absent — this keeps a session alive for the
+   refresh token's full lifetime.
+2. **`fetchWithRefresh`** in the `ApiClient` is the reactive fallback for Route Handlers and Server
+   Actions: on a 401 it refreshes once and retries once. A 401 reaching it from an RSC read fails
+   closed instead of attempting a refresh it couldn't persist.
+
+Cookies are cleared only on Go's 401 — a 429, 5xx or outage keeps the session. The reactive refresh is driven by the engine's `ApiClient`: a single in-flight refresh promise serializes concurrent `401`s so the single-use refresh token is never spent twice. On refresh failure the client clears the cookie and signals session-expired; callers redirect to `/login`. See [View Engine → ApiClient](view-engine.md#apiclient-the-bff-data-client).
 
 ---
 
 ## Route guarding
 
-`RequireAuth` is a **server** check: an anonymous request to a protected route is redirected to `/login` before any page code runs. The catch-all module route additionally runs the per-route **permission** guard. The login page (`app/(auth)/login/page.tsx`, a client MUI form) posts to the BFF login route, shows the server's `ApiError` message inline on bad credentials, and redirects to the intended route on success.
+`requireAuth(path)` is a **server** check: an anonymous request to a protected route is redirected
+to `/app/login` before any page code runs; the catch-all module route additionally runs the
+per-route **permission** guard. A Go `403 PASSWORD_CHANGE_REQUIRED` sends the user to
+`/app/force-password-change` instead.
 
-The net effect: an unauthenticated user cannot reach a module route (server-enforced, no flash of protected UI), bad credentials surface the backend message, and a stolen/rotated refresh cleanly logs the user out.
+## Sign-in methods
+
+`/app/login` reads Go's `GET /auth/methods`: the default method on top, enabled alternatives below;
+`?method=local` always shows the local form, and a failure falls back to local.
+
+| BFF route | Does |
+|---|---|
+| `POST /api/auth/login` | local password |
+| `POST /api/auth/ldap` | LDAP username + password |
+| `GET /api/auth/oidc/[provider]/start` | redirects to the IdP; state, nonce and PKCE verifier in a 10-minute httpOnly cookie |
+| `GET /api/auth/oidc/[provider]/callback` | checks state, exchanges the code through Go, sets the session; `next` is kept inside the ERP |
+
+The OIDC redirect URI is built from the configured `erp_url`, never from the `Host` header. See
+[External Sign-In](../core/external-auth.md). Settings → Authentication edits the configuration;
+secrets are write-only inputs, and a load failure disables Save (an empty save would wipe it).
+
+## Website visitor session
+
+A website visitor's login is a **second, independent session**: cookies `eerp_site_access` /
+`eerp_site_refresh` (never the ERP's), set by the BFF routes `/api/site-auth/*` that proxy Go's
+`/api/v1/website/auth/*`. Keeping them apart means a visitor token (`aud: website`) can never be
+presented as an ERP session, and staff can be signed in to both at once — Go refuses the wrong
+audience on both sides anyway. `proxy.ts` rotates it like the ERP session and forwards the client
+IP to Go explicitly. Visitor pages: `/login`, `/signup`, `/account`. See
+[Website & Public Access](../core/website.md#website-visitors).
 
 ---
 

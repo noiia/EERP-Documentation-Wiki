@@ -28,17 +28,26 @@ const formView: ViewDescriptor = {
 
 ## Always-present chrome
 
-Every form route gets, unconditionally:
+Every form route gets, unconditionally, in one toolbar row above the form:
 
-- The [form actions menu](form-chrome.md) (kebab icon, top-right) — disabled if `actions` is empty.
-- Save and Reset, immediately to the actions menu's left.
-- A [chatter panel](chatter-panel.md), if `showChatter: true`.
-- A [status bar](form-chrome.md#status-bar), if `statusBar` names a `selection` field.
+- **Save** and an icon-only **Reset** — Save is disabled until the draft is dirty.
+- The [form actions menu](form-chrome.md) — the descriptor's `actions`, plus a built-in
+  **Delete** when the caller holds `<entity>:<entity>:delete`. Delete commits at once, returns to
+  the list and offers the [undo toast](undo-toast.md) (Recover calls the generic restore).
 - [Header buttons](form-chrome.md#header-buttons), if `headerButtons` is declared.
+- A [status bar](form-chrome.md#status-bar), if `statusBar` names a `selection` field.
+- A **record navigator** (`<` / `>`) stepping through the same filtered, sorted list the user just
+  browsed (session-only `list-nav-store`), without going back to the list.
+- A [chatter panel](chatter-panel.md) — **on by default**; a module opts out with
+  `showChatter: false`, and a workspace can override per entity
+  (`/settings/views/:entity/chatter`).
 
-None of these require a custom component — they're descriptor fields the engine renders
-unconditionally. See [ADR-012: Form Actions Menu](../../adrs/012-form-actions-menu.md) for why the
-form's own page title was dropped in favor of this chrome.
+Errors from a save show in an `ErrorAlert`: missing required fields are named ("Fill in: …"),
+fields the form doesn't show are flagged as a model/form mismatch to report, and a **Copy
+details** button copies code, message, request id, page and time for an administrator.
+
+None of these require a custom component. See [ADR-012: Form Actions Menu](../../adrs/012-form-actions-menu.md)
+for why the form's own page title was dropped in favor of this chrome.
 
 ## An explicit layout
 

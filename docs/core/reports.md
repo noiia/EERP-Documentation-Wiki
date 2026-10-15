@@ -51,6 +51,20 @@ field into falling back to the workspace's active-company profile at *print time
 record's own value is empty — see [ADR-013 → Decision 7](../adrs/013-multi-company.md) and
 [Settings](settings.md). `sale.invoice`'s four issuer fields are the first consumer.
 
+## Letterhead and page formats
+
+Two layers decide how a printed page looks, both editable without code:
+
+| Layer | Where | Holds |
+|---|---|---|
+| Workspace letterhead | `reports.layout` setting, `GET\|PUT /api/v1/settings/reports/layout` (`settings:reports:*`) | `{footer, address}` stamped on every PDF (≤ 5 000 chars each) |
+| Named page formats | `report_page_format` table (`core/modules/reportlayout`, generic CRUD) | `name`, `width` / `height` / `unit` (`px`, `cm`, `in`), optional `padding`, text / muted / border / accent colors, `footer` / `address` overrides |
+
+A `ReportDescriptor` opts into a format with `pageFormat: '<name>'`. Every override column is
+nullable: unset means "inherit the workspace letterhead" (footer/address) or the built-in default
+(padding 100 px, the default colors). Formats can be company-specific (`company_id`), like every
+other workspace setting.
+
 ## `PDFRenderer` interface
 
 `core/internal/reports` exposes one interface with two implementations, so the transport can grow

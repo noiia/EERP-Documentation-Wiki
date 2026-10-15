@@ -67,7 +67,6 @@ func init() {
 
 type Expense struct {
     model.BaseModel
-    TenantID uuid.UUID `db:"tenant_id"`
     Name     string    `db:"name"`
 }
 
@@ -109,7 +108,6 @@ Add the fields expense tracking actually needs:
 ```go
 type Expense struct {
     model.BaseModel
-    TenantID    uuid.UUID  `db:"tenant_id"`
     Name        string     `db:"name"`
     AmountCents int64      `db:"amount_cents"` // integer cents, never float
     Category    string     `db:"category"`
@@ -208,4 +206,4 @@ make run-back-tests BACKTESTPATH=./modules/expense/...
 - [Creating a Go Module](creating-a-go-module.md) · [Creating an Entity](creating-an-entity.md) · [Creating a Frontend Module](creating-a-frontend-module.md)
 - [Server Integration](../development/server-integration.md) — what happens at startup, in detail
 - [Views & Components](../frontend/views-and-components/index.md)
-- [Deployment → Docker Compose](deployment.md#docker-compose-recommended)
+- [Deployment → Docker Compose](deployment.md#the-deployed-stack)

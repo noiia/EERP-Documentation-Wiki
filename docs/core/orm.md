@@ -63,7 +63,7 @@ sequenceDiagram
 Every ORM-managed struct embeds `model.BaseModel`:
 
 ```go
-import "eerp/core/orm/model"
+import "core/orm/model"
 
 type Order struct {
     model.BaseModel          // (1)
@@ -75,7 +75,7 @@ type Order struct {
 func (Order) TableName() string { return "orders" } // (2)
 ```
 
-1. `BaseModel` contributes four columns: `id` (UUID, PK), `created_at`, `updated_at`, `deleted_at`.
+1. `BaseModel` contributes five columns: `id` (UUID, PK), `created_at`, `updated_at`, `deleted_at`, and `tenant_id` (indexed — every entity that embeds it is tenant-owned).
 2. If `TableName()` is not implemented, the table name is derived as `snake_case(TypeName)`.
 
 `BaseModel` provides:
@@ -86,6 +86,9 @@ func (Order) TableName() string { return "orders" } // (2)
 | `CreatedAt` | `time.Time` | `created_at` | Set on INSERT |
 | `UpdatedAt` | `time.Time` | `updated_at` | Set on INSERT and UPDATE |
 | `DeletedAt` | `*time.Time` | `deleted_at` | nil = active; non-nil = soft-deleted |
+| `TenantID` | `uuid.UUID` | `tenant_id` (indexed) | the owning tenant — the row isolation boundary, set server-side |
+
+A genuinely tenant-less table (the global permission catalog, refresh tokens scoped by `user_id`, boot-time bookkeeping) does **not** embed `BaseModel`; it declares the other fields by hand. Go embedding has no per-field opt-out.
 
 ### Struct Tags
 
@@ -115,6 +118,16 @@ type Session struct {
 ```
 
 Indexes are created as `idx_<table>_<column>` with `CREATE INDEX IF NOT EXISTS`, so migration is **idempotent**: adding an `index` tag to an existing column creates the index on the next startup without touching the data. Removing the tag does **not** drop the index — drop it manually if it is no longer wanted (the migration path is additive by design; see [Module System](module-system.md)).
+
+!!! note "No unique constraints in tags; no hand-written search indexes"
+    Tags only create plain, non-unique indexes. A unique constraint (needed by `Upsert`'s
+    conflict target) is hand-written SQL in the module's `Migrate()` hook — e.g.
+    `user_presence(tenant_id, user_id)`. Conversely, never hand-write a trigram index for
+    `search[]`: [automatic search indexes](list-performance.md#automatic-search-indexes) build
+    them where the data pays for them. Geographic columns use `index=gist` ([Geographic Fields](geo.md)).
+
+All schema DDL — at boot and in tests — runs under a Postgres advisory lock, because
+`CREATE TABLE IF NOT EXISTS` races when several processes migrate one database.
 
 The WASM/JSON migration path exposes the same capability via an operation: set `"index": true` (optionally `"index_type"`) on an `add_column` op, or emit a standalone `{"type": "create_index", "table": "...", "column": "...", "index_type": "gin"}`. This keeps the Go-tag path and the WASM-ABI path at feature parity — a module declares an index the same way regardless of which loader path it uses.
 
@@ -184,6 +197,59 @@ n, err := orders.HardDelete(ctx, id)
 err = orders.Restore(ctx, id)
 ```
 
+`Create` / `Upsert` insert the primary key too when it is set explicitly (a DB-side
+`DEFAULT gen_random_uuid()` fills it otherwise), so deterministic-id seeding inserts the id
+as given.
+
+### Upsert on a natural key
+
+`Update` replaces a whole row by primary key. When a row is identified by a **natural key**
+(`(tenant_id, user_id)`) and a write must touch only some columns, use `Upsert`:
+
+```go
+row, err := presence.Upsert(ctx, p,
+    []string{"tenant_id", "user_id"},                     // conflict target
+    "connected = EXCLUDED.connected, updated_at = now()") // only these columns on conflict
+
+// setFragment "" = ON CONFLICT DO NOTHING; the existing row is re-read and returned.
+role, err := roles.Upsert(ctx, seededRole, []string{"id"}, "")
+
+// Target backed by a PARTIAL unique index (e.g. "… WHERE deleted_at IS NULL"):
+// Postgres needs the predicate repeated, or the upsert fails with 42P10.
+row, err := templates.UpsertPartial(ctx, t, []string{"tenant_id", "key", "locale"}, "deleted_at IS NULL", "body_html = EXCLUDED.body_html")
+```
+
+The conflict target **must be a real unique index** — struct tags can't declare one, so it is
+hand-written in the module's `Migrate()` (see [Indexes](#indexes)).
+
+### Conditional updates: `UpdateQuery`
+
+The write-side counterpart of the SELECT builder, pre-bound to the repository's table:
+
+```go
+n, err := orders.UpdateQuery().
+    Set("status", "shipped").
+    Where(orm.Cond("id = $1 AND status = $2", id, "paid")). // a guarded transition
+    Exec(ctx, db)
+```
+
+`n == 0` tells the caller the guard didn't match — the basis of race-free counters such as
+[event seat capture](events.md#capacity-without-overbooking).
+
+### Row locking: `SelectForUpdate`
+
+```go
+err := orm.Transact(ctx, db, func(tx *orm.Tx) error {
+    due, err := jobs.SelectForUpdate().SkipLocked().
+        Where(orm.Cond("status = $1", "pending")).Limit(20).All(ctx, tx)
+    // … rows stay locked until COMMIT …
+})
+```
+
+`SELECT … FOR UPDATE`, excluding soft-deleted rows. It must run on a `*Tx`
+(`ErrLockOutsideTx` otherwise). `SkipLocked()` for work queues (the [mail sender](mail.md)
+claims its batch this way), `NoWait()` to fail instead of waiting, `Of(tables…)` with joins.
+
 ### Batch Operations
 
 ```go
@@ -219,12 +285,11 @@ The tenant comes from the request context, where the JWT middleware stamps it vi
 !!! danger "Fail closed"
     If a tenant-scoped table is accessed with **no tenant in the context**, the repository returns `crud.ErrTenantMissing` rather than running an unscoped, all-tenants query. A wiring or authentication gap can never silently widen access.
 
-Tables **without** a `tenant_id` column are global by design (for example the shared permission catalog). To make a business entity tenant-owned, simply add a `tenant_id` column to its struct — isolation then applies automatically, with no handler changes:
+Embedding `model.BaseModel` is what makes an entity tenant-owned — `TenantID` is one of its fields — so every business entity is isolated with no handler changes. Tables **without** a `tenant_id` column (the shared permission catalog) are global by design:
 
 ```go
 type Contact struct {
     model.BaseModel
-    TenantID uuid.UUID `db:"tenant_id"` // set server-side; makes the table tenant-scoped
     Name     string    `db:"name"`
 }
 ```
@@ -277,6 +342,32 @@ The `crm` table gains `date`/`comment` columns and they appear on the generic CR
 
 For registration ordering (why the base module must load first) and the frontend's mirror of this same "extend, don't patch" pattern, see [ADR-006: Frontend View Inheritance](../adrs/006-view-inheritance.md).
 
+#### Composable extension: `ExtendSchema`
+
+Re-registering a table is not composable: the last `Register` wins, so two modules can't both
+extend `crm` that way. `orm.ExtendSchema` adds columns **without** re-registering:
+
+```go
+func (m *myModule) Register() error {
+    return orm.ExtendSchema("contact", []orm.SchemaField{
+        {Column: "loyalty_points", Type: reflect.TypeFor[int]()},
+        {Column: "loyalty_tier"}, // Type nil = TEXT
+    })
+}
+```
+
+Several modules may extend one table; columns are always nullable, typed by `Type`, and kept
+when the owner registers the table again later. Trade-off: no typed Go access — use the embed
+pattern when your own Go code needs the fields as struct members.
+
+### Public read scope
+
+`orm.Register[T](orm.WithPublicFields("name", "price"))` declares which fields *may* be read
+anonymously on `/api/v1/public/{table}` (`orm.AllPublicFields` = every API column except the
+PK, `tenant_id`, `deleted_at` and gated ones). Nothing is public until an admin publishes a
+subset. Enforced by the same `checkColumn` / `BuildResponse` choke points as group gating —
+see [Website & Public Access](website.md).
+
 ---
 
 ## Relations
@@ -293,13 +384,11 @@ A `relation` field on the frontend descriptor (many-to-one, one-to-many, many-to
 // core/modules/crm/internal/tags.go
 type Tag struct {
     model.BaseModel
-    TenantID uuid.UUID `db:"tenant_id"`
     Name     string    `db:"name"`
 }
 
 type CrmTag struct {   // junction row — <own>_id / <related>_id by convention
     model.BaseModel
-    TenantID uuid.UUID `db:"tenant_id"`
     CrmID    uuid.UUID `db:"crm_id,index"`
     TagID    uuid.UUID `db:"tag_id"`
 }
@@ -319,7 +408,17 @@ The generic CRUD list endpoint (`GET /api/v1/{table}`) accepts bracketed query p
 | `search[<column>]=<text>` | Case-insensitive containment (`column::text ILIKE '%'\|\|$1\|\|'%'`) | `?search[name]=mart` |
 | `in[<column>]=<v1>,<v2>,...` | One of several values (`column::text = ANY($1)`) | `?in[id]=<id1>,<id2>` |
 | `gt[<column>]=`, `gte[<column>]=`, `lt[<column>]=`, `lte[<column>]=` | Range comparison, type-aware cast (`numeric` or `timestamptz`, derived from `FieldMeta.GoType` — never a lexicographic `::text` compare) | `?gte[created_at]=2026-01-01` |
+| `empty[<column>]=1` | `NULL` or `''` — what an empty `filter` value can't say (it means "no filter") | `?empty[status]=1` |
+| `order=<column>` / `order=-<column>` | Sort (descending with `-`), primary key as tiebreak. **Pass one whenever you page** — without it the order is undefined | `?order=-created_at` |
 | `distinct=<column>` (combinable with the above) | Returns that column's distinct values plus per-value row counts (capped at 500), instead of a paginated page | `?distinct=status` |
+| `aggregate=sum\|avg\|mean\|median\|count&value=<col or formula>[&x=<date>&bucket=day\|week\|month][&group=<col>]` | `{groups:[{x, group, value, count}]}` over **every** matching row — Graph tiles ([ADR-024](../adrs/024-graph-server-aggregation.md)) | `?aggregate=sum&value=total&x=created_at&bucket=month` |
+| `near[]`, `within[]`, `covers[]`, `inside[]` | Geographic filters on `orm.GeoPoint` / `orm.GeoShape` columns | see [Geographic Fields](geo.md) |
+
+The envelope is `{data, total}`. `total` is exact up to 10 000 matching rows
+(`orm.ExactCountLimit`); beyond, it is the planner's estimate and the envelope adds
+`total_estimated: true` — never use it as a loop bound ([List Read Performance](list-performance.md)).
+A unique violation on create/update answers 409. With `redis_url` set, these reads may be served
+from the [Redis read cache](query-cache.md).
 
 Every one of these is validated against the table's registered columns before touching SQL — an unknown column is a `400` (`"unknown filter column: …"`), not a silently-ignored parameter or an injection risk, since only known-safe identifiers are ever interpolated. `filter[col]` is what the frontend uses to scope relation reads (an o2m's inverse list, an m2m's junction rows); `search[col]` backs the m2o relation widget's autocomplete; `in[col]` is what the built-in [search/filter bar](../adrs/015-search-filter-bar.md) uses to batch-resolve many-to-many links in one round trip instead of one request per row (see [ADR-018](../adrs/018-http2-edge-rest-batching.md)); `distinct=` backs the search bar's group-by section. See [View Engine → Relation widgets](../frontend/view-engine.md#field-widgets) and [Search & Filter Bar](../frontend/views-and-components/search-filter-bar.md) for the client side.
 
@@ -479,7 +578,7 @@ Semantics:
 ## Logging
 
 ```go
-import "eerp/core/orm/log"
+import "core/orm/log"
 
 // Production: log only errors
 db, err := orm.Open(cfg, log.NewNoopLogger())

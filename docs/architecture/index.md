@@ -86,6 +86,39 @@ graph TB
 
 Each layer has a strict contract with the one below it. Modules never talk to each other directly — all inter-module communication flows through the core. The gateway is the one layer that sits *outside* this chain of contracts rather than inside it: it terminates TLS and routes by path, but never inspects or participates in the application protocol above it (no auth, no business logic) — see [Edge Gateway](#edge-gateway-api-gateway) below.
 
+### Runtime topology
+
+The layers above run as these Compose services. The browser only ever talks to the gateway;
+`pdf-service` is reachable from neither the gateway nor the browser.
+
+```mermaid
+flowchart LR
+    Browser -->|"HTTPS :443"| Gateway["api-gateway (nginx)"]
+    Gateway -->|"/ (site), /app (ERP), BFF /api/*"| Front["core-front (Next.js :3000)"]
+    Gateway -->|"/api/v1/*, /health"| Back["core-back (Go :8080)"]
+    Front -->|"BFF: server-side fetch"| Back
+    Back --> DB[("PostgreSQL + PostGIS")]
+    Back --> Garage[("Garage / S3")]
+    Back -.->|"optional read cache"| Redis[("Redis")]
+    Back -.->|"SMTP"| Mail[("Mailpit / SMTP relay")]
+    Back -->|"reports.render"| NATS(("NATS"))
+    NATS -->|"queue group pdf-workers"| PDF["pdf-service ×N"]
+    PDF -->|"print page"| Front
+```
+
+| Service | Role | Optional? |
+|---|---|---|
+| `api-gateway` | TLS, HTTP/2, routing; the only published port | no |
+| `core-front` | public site at `/`, ERP at `/app`, BFF | no |
+| `core-back` | the Go core and every compiled-in module | no |
+| `db` | PostgreSQL 18 + PostGIS (+ `pg_trgm`) | no |
+| `garage` | S3-compatible object storage (pictures, attachments, PDFs) | features need it |
+| `nats` + `pdf-service` | PDF rendering pool ([Reports](../core/reports.md)) | reports need it |
+| `redis` | [read cache](../core/query-cache.md) | yes |
+| `mailpit` | dev mail catcher; a real SMTP relay in production ([Mail](../core/mail.md)) | yes |
+
+See [Deployment & Bootstrap](../developer-guide/deployment.md) for how each environment starts them.
+
 ---
 
 ## Why This Architecture
@@ -125,7 +158,8 @@ holds no session state, makes no authorization decisions, and never touches appl
 |---|---|---|
 | `/api/v1/*`, `/health` | `core-back :8080` | The Go API, straight through |
 | `/healthz` | itself | Gateway's own liveness probe; the one path exempt from the HTTPS redirect |
-| everything else | `core-front :3000` | Next.js pages, static assets, and the BFF's own `/api/*` routes (auth, pictures, attachments, reports — see [Object Storage Across Layers](../architecture/object-storage-topology.md)) |
+| everything else | `core-front :3000` | the public website (`/`), the ERP (`/app/…` — see [Website → Routing](../core/website.md#routing-path-or-host-mode)), static assets, and the BFF's own `/api/*` routes (auth, pictures, attachments, reports — see [Object Storage Across Layers](../architecture/object-storage-topology.md)) |
+| `/.well-known/acme-challenge/` | the `acme-webroot` volume | Let's Encrypt HTTP-01 challenges, production only |
 
 Plain `http://` (port 80) 301-redirects to `https://` (port 443) for every path except `/healthz`.
 HTTP/2 is negotiated only on the TLS listener — see [HTTP Pipeline → TLS/HTTP2 Edge
@@ -144,14 +178,15 @@ client, don't reliably speak cleartext h2c) and for the ADR behind it
   are `core-back`'s dependencies, one layer further in. A gateway that's up with a backend that
   isn't simply returns upstream errors for `/api/v1/*`, rather than failing to start.
 
-See [Deployment → Docker Compose](../developer-guide/deployment.md#docker-compose-recommended) for
+See [Deployment → Docker Compose](../developer-guide/deployment.md#the-deployed-stack) for
 the full service topology this sits in front of.
 
 ### Core Runtime (Go)
 
 | Component | Responsibility |
 |---|---|
-| `cmd/app/main.go` | Bootstrap: DB pool, Wasmtime engine, WASM module loading, Go service wiring |
+| `cmd/app/main.go` | Flags and config loading only; hands off to `internal/app` |
+| `internal/app` | `Build` validates config, opens the pool, boots the module registry, mounts every route (testable — returns errors, never exits); `Run` starts background jobs and serves |
 | `orm/` | Type-safe database access via generics |
 | `internal/module/detector.go` | Filesystem scan, `module.json` parsing, dependency resolution, priority assignment |
 | `internal/module/load.go` | Wasmtime instantiation, `migrate()` call, DDL execution |
@@ -178,7 +213,7 @@ Each module's Go service:
 1. Defines entity structs (embedding `model.BaseModel`)
 2. Instantiates a typed `orm.Repository[T]` for each entity
 3. Implements business operations using the ORM's query builder and transaction API
-4. Will register HTTP handlers with the router once the handler dispatch layer is implemented
+4. Gets generic CRUD routes for every registered table automatically, and mounts hand-written handlers only where a rule needs one (see [Automatic Router](../core/router.md))
 
 ### Frontend (Next.js + Zustand)
 
@@ -221,34 +256,26 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant main
-    participant config
-    participant pool as DB Pool
-    participant detector as Module Detector
-    participant loader as Module Loader
-    participant wasm as Wasmtime
-    participant svc as Go Services
+    participant main as cmd/app/main.go
+    participant build as app.Build
+    participant reg as module.Registry
+    participant run as App.Run
 
-    main->>config: Read eerp-config.json
-    main->>pool: Open pgxpool (validate connectivity)
-    main->>detector: Scan module_root directories
-    detector->>detector: Parse module.json files
-    detector->>detector: Topological sort by depends[]
-    detector->>detector: Assign load priority
-    main->>loader: LoadModules(store, linker, moduleRoots)
-    loop Priority group (goroutines per group)
-        loader->>wasm: Instantiate .wasm binary
-        loader->>wasm: migrate_len() → byte count
-        loader->>wasm: migrate() → memory pointer
-        loader->>loader: Read WASM linear memory[ptr:ptr+len]
-        loader->>loader: JSON.Unmarshal → Migration struct
-        loader->>pool: ALTER TABLE … (apply operations)
-    end
-    main->>svc: Wire Go services (e.g. crm.New(db))
-    main->>main: Start HTTP server
+    main->>main: read eerp-config.json, ResolvePaths
+    main->>build: Build(ctx, cfg)
+    build->>build: validate (environment, master_key, db_password, smtp)
+    build->>build: ensure database exists, open pgx pool
+    build->>reg: NewRegistry: detect module.json, order by depends[]
+    reg->>reg: load every module (Go + WASM, active or not), migrate under advisory lock
+    build->>build: seed default roles/admin, mount routes (optional features by config)
+    main->>run: Run(ctx)
+    run->>run: fail interrupted activities, start cron, quote expiry, presence sweep,<br/>mail sender, reminders, notification retention, search-index maintainer
+    run->>run: serve until SIGINT/SIGTERM
 ```
 
-The WASM phase (schema) and the Go service wiring are sequential but separate. A module can run as a pure Go service even before its WASM binary exists — the loader skips the migrate step if no `.wasm` is found.
+Every error in `Build` is returned rather than fatal, so `internal/app/app_test.go` boots the whole
+wiring against the test database and drives real routes. Background jobs start only in `Run`, so
+tests never spawn them.
 
 ---
 

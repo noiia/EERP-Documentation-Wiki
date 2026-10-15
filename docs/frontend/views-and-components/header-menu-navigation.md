@@ -19,8 +19,37 @@ automatically, labeled from `navLabel` (falling back to a derived label from the
 
 ## Hand-placed menu entries
 
-A module can also register a menu entry that isn't tied to a single route, via
-`registerHeaderMenu` — used for cross-cutting entries that don't map to one descriptor.
+Only the **current app's** menus show in the top bar. Each app gets one menu per listed route, any
+menu it registers, and always a trailing **Configuration** menu with a *Settings* line to
+`/settings/apps/<module>`. A module adds lines — or a whole menu — with `registerHeaderMenu`:
+
+```ts
+registerHeaderMenu('event', 'configuration', {
+  entries: [{ kind: 'line', label: 'Availability', path: '/event/availability', permission: 'event_availability:event_availability:read' }],
+})
+```
+
+Calls are additive (same `(module, name)` appends; a `group` merges into a same-labeled group);
+nodes are one level deep (`line`, or `group` of lines). A menu whose permitted content is a single
+line navigates directly instead of opening a one-item dropdown. When the row doesn't fit, it
+collapses into one icon opening a two-level drill-down menu.
+
+## Top bar layout
+
+From left to right: the active company's **logo** (also the upload button for holders of
+`company:company:write`), the breadcrumb, the app's menus, then the
+[notification bell](../../core/notifications.md#frontend), the **company switcher** and the account
+menu (with presence status, see [Live Channel](../../core/live-channel.md)).
+
+Below 768 px (`layout.topBarCompactWidth`) the bar compacts: the breadcrumb becomes a single
+`angles-right` icon listing every visited crumb (its first line is home), and the company switcher
+shows only its building icon. Icons grow slightly on phones for finger taps.
+
+## ERP paths
+
+Module paths stay relative (`/crm/:id`); the ERP lives under `/app`, added by `erpPath()` wherever
+a link is emitted (`router.push`, `<Link href>`, redirects). Old bare paths 307 to `/app/…`. See
+[Website → Routing](../../core/website.md#routing-path-or-host-mode).
 
 ## Landing-page tiles
 

@@ -40,6 +40,20 @@ ADRs are **immutable** once accepted. If a decision is reversed or superseded, a
 | [ADR-017](017-cron-scheduler.md) | Background cron scheduler over the generic CRUD surface | Accepted | 2026-08 |
 | [ADR-018](018-http2-edge-rest-batching.md) | HTTP/2 at the gateway edge, batching over GraphQL | Accepted | 2026-08 |
 | [ADR-019](019-per-model-view-files.md) | One view file per DB model, one file per report | Accepted | 2026-08-27 |
+| [ADR-020](020-user-presence-websocket.md) | User presence over a direct-to-Go WebSocket | Accepted | 2026-09-14 |
+| [ADR-021](021-graph-calculated-fields.md) | Graph calculated fields and multi-line charts | Accepted | 2026-09-20 |
+| [ADR-022](022-database-management.md) | Unauthenticated, master-key database management | Accepted | 2026-09-24 |
+| [ADR-023](023-optional-redis-query-cache.md) | Optional Redis read cache for the generic CRUD API | Accepted | 2026-09-28 |
+| [ADR-024](024-graph-server-aggregation.md) | Server-side aggregation for Graph tiles | Accepted | 2026-09-28 |
+| [ADR-025](025-public-access-and-website-identities.md) | Public data access and website identities | Accepted | 2026-09-29 |
+| [ADR-026](026-website-routing-and-erp-base-path.md) | Website routing and the ERP `/app` base path | Accepted | 2026-09-29 |
+| [ADR-027](027-booking-capacity.md) | Booking capacity without a lock table | Accepted | 2026-09-30 |
+| [ADR-028](028-mail-templates.md) | Email templates registered in code, overridden per workspace | Accepted | 2026-10-06 |
+| [ADR-029](029-payment-providers.md) | Online payment: a provider registry, Stripe as a module | Accepted | 2026-10-06 |
+| [ADR-030](030-geographic-fields.md) | Geographic fields: PostGIS, GeoJSON on the wire | Accepted | 2026-10-10 |
+| [ADR-031](031-external-authentication.md) | External authentication: LDAP and OIDC | Accepted | 2026-10-11 |
+| [ADR-032](032-notifications.md) | Notifications and live activity | Accepted | 2026-10-13 |
+| [ADR-033](033-list-read-performance.md) | List read performance: bounded totals, automatic trigram indexes | Accepted | 2026-10-13 |
 
 ---
 

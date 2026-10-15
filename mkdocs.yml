@@ -103,11 +103,25 @@ nav:
       - Record-Anchored Services: core/record-anchored-services.md
       - Background Cron Scheduler: core/cron.md
       - Reports & PDF Generation: core/reports.md
+      - "Presence & the Live Channel": core/live-channel.md
+      - Notifications: core/notifications.md
+      - "Website & Public Access": core/website.md
+      - "Events & Booking": core/events.md
+      - "Mail: Outbox & Templates": core/mail.md
+      - Payment Providers: core/payments.md
+      - Geographic Fields: core/geo.md
+      - "External Sign-In (LDAP & OIDC)": core/external-auth.md
+      - List Read Performance: core/list-performance.md
+      - Redis Read Cache: core/query-cache.md
+      - Database Management: core/database-management.md
+      - "Versioning & Service Versions": core/versioning.md
+      - Demo Data: core/demo-data.md
   - Frontend:
       - Overview: frontend/index.md
       - "View Engine (@eerp/core-front)": frontend/view-engine.md
       - Module Discovery: frontend/module-discovery.md
       - "Authentication (BFF)": frontend/authentication.md
+      - Website Builder: frontend/website-builder.md
       - Views & Components:
           - Overview: frontend/views-and-components/index.md
           - List View: frontend/views-and-components/list-view.md
@@ -120,6 +134,7 @@ nav:
           - Report View: frontend/views-and-components/report-view.md
           - Relation Widgets: frontend/views-and-components/relation-widgets.md
           - Address Widget: frontend/views-and-components/address-widget.md
+          - Geographic Widgets: frontend/views-and-components/geo-widgets.md
           - Totals Widget: frontend/views-and-components/totals-widget.md
           - "Picture, Signature & File Widgets": frontend/views-and-components/picture-signature-file-widgets.md
           - Search & Filter Bar: frontend/views-and-components/search-filter-bar.md
@@ -138,7 +153,7 @@ nav:
       - "Creating a Frontend Module": developer-guide/creating-a-frontend-module.md
       - Creating an Entity: developer-guide/creating-an-entity.md
       - Testing: developer-guide/testing.md
-      - Deployment: developer-guide/deployment.md
+      - "Deployment & Bootstrap": developer-guide/deployment.md
   - ADRs:
       - Overview: adrs/index.md
       - "ADR-001: Custom ORM": adrs/001-custom-orm.md
@@ -160,3 +175,17 @@ nav:
       - "ADR-017: Cron Scheduler": adrs/017-cron-scheduler.md
       - "ADR-018: HTTP/2 Edge & REST Batching": adrs/018-http2-edge-rest-batching.md
       - "ADR-019: Per-Model View Files": adrs/019-per-model-view-files.md
+      - "ADR-020: User Presence over WebSocket": adrs/020-user-presence-websocket.md
+      - "ADR-021: Graph Calculated Fields": adrs/021-graph-calculated-fields.md
+      - "ADR-022: Database Management": adrs/022-database-management.md
+      - "ADR-023: Optional Redis Query Cache": adrs/023-optional-redis-query-cache.md
+      - "ADR-024: Graph Server Aggregation": adrs/024-graph-server-aggregation.md
+      - "ADR-025: Public Access & Website Identities": adrs/025-public-access-and-website-identities.md
+      - "ADR-026: Website Routing & ERP Base Path": adrs/026-website-routing-and-erp-base-path.md
+      - "ADR-027: Booking Capacity": adrs/027-booking-capacity.md
+      - "ADR-028: Mail Templates": adrs/028-mail-templates.md
+      - "ADR-029: Payment Providers": adrs/029-payment-providers.md
+      - "ADR-030: Geographic Fields": adrs/030-geographic-fields.md
+      - "ADR-031: External Authentication": adrs/031-external-authentication.md
+      - "ADR-032: Notifications": adrs/032-notifications.md
+      - "ADR-033: List Read Performance": adrs/033-list-read-performance.md

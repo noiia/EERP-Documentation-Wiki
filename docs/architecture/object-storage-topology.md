@@ -48,7 +48,7 @@ All three handlers are constructed with the **same** `pictures.ObjectStore` inte
 **same** `pictures.NewS3Store(cfg)` client (`core/cmd/app/main.go`) — `internal/attachments` and
 `internal/reports` don't have their own S3 client type, they're handed the pictures package's one.
 There is exactly one `s3_*` configuration block (`s3_endpoint`, `s3_region`, `s3_bucket`,
-`s3_access_key`, `s3_secret_key` — see [Configuration](../core/configuration.md#field-reference))
+`s3_access_key`, `s3_secret_key` — see [Configuration](../core/configuration.md#optional-services))
 and, in the shipped dev/Compose setup, exactly one bucket. The three services share it by
 convention on **key prefix**, not by separate buckets or separate credentials.
 
@@ -109,4 +109,4 @@ Context](../adrs/011-pdf-report-generation.md) gives for reports specifically.
 - [Reports & PDF Generation](../core/reports.md) — the reports delivery model in depth
 - [Record-Anchored Services](../core/record-anchored-services.md) — the anchor pattern pictures/attachments follow (and reports doesn't)
 - [Edge Gateway](index.md#edge-gateway-api-gateway) — why the browser never reaches Garage directly
-- [Configuration → Field Reference](../core/configuration.md#field-reference) — the `s3_*` fields all three services share
+- [Configuration → Field Reference](../core/configuration.md#optional-services) — the `s3_*` fields all three services share

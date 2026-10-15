@@ -49,7 +49,13 @@ Two behaviors matter for correctness:
 
 ### Error model
 
-Every failure becomes an `ApiError { code, message, requestId, status }`. `parseError(response)` reads the Go error envelope `{ error: { code, message, request_id } }`; if the body is not that shape it synthesizes a code from the status (`500 → INTERNAL_ERROR`). The `requestId` is always surfaced so a UI error can be traced back to a backend log line.
+Every failure becomes an `ApiError { code, message, requestId, status, fields? }`. `parseError(response)` reads the Go error envelope `{ error: { code, message, request_id, fields? } }`; if the body is not that shape it synthesizes a code from the status (`500 → INTERNAL_ERROR`). The `requestId` is always surfaced so a UI error can be traced back to a backend log line.
+
+**Server Actions never throw a Go error to the client**: a production Next build replaces a thrown
+error's message with an opaque digest. Wrap the body in `settleAction(() => …)`, which returns an
+`ActionError` value; `EntityView` and every Ops provider (`unwrapActions`) turn it back into a thrown
+`ApiError`, so consumers keep plain `try/catch`. `ErrorAlert` renders it — required fields named,
+fields missing from the form flagged, and a **Copy details** button for the administrator.
 
 ---
 
@@ -146,12 +152,14 @@ Kanban, Calendar, Graph, Form, Catalog, Dashboard, Report) with real, shipped-mo
 
 | Type | Widgets (first = default) |
 |---|---|
-| `text` | `simple`, `long`, `phone`, `table`, `color`, `url` |
+| `text` | `simple`, `long`, `phone`, `table`, `color`, `url`, `html` (Tiptap rich text — the storing service must sanitize) |
 | `number` | `float`, `int`, `percent`, `stars`, `phone`, `monetary` |
 | `boolean` | `switch`, `picture`, `signature`, `file` |
-| `date` | `simple` |
+| `date` | `simple` (`YYYY-MM-DD`), `datetime` (a timestamptz instant edited in the browser's zone, stored as UTC) |
 | `selection` | `select`, `linked` (patches sibling fields per `widgetOptions.presets` — e.g. PDF page-format presets) |
 | `relation` | `search`, `tags`, `list` (one [default per relation kind](#relation-widgets)), plus `carousel` and `summary` overrides |
+| `geo` | `point`, `shape` — Leaflet maps over PostGIS columns ([Geographic Widgets](views-and-components/geo-widgets.md)) |
+| `distance` | `meters` — the distance between two records' points, in km or miles |
 | `totals` | `recap` — a live, computed recap of sibling relation lines (e.g. a sale quote's tax-rate breakdown); always `store: false` |
 | `address` | `form` — a composite widget owning seven sibling columns (`<name>_number\|complement\|street\|zip_code\|city\|state\|country`), with optional OpenStreetMap autocomplete (see [Settings → OpenStreetMap connector](../core/settings.md#openstreetmap-connector)) |
 

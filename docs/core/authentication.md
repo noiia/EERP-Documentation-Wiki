@@ -25,8 +25,14 @@ Token TTLs are configurable via `eerp-config.json`:
 | Config field | Default | Purpose |
 |---|---|---|
 | `master_key` | — | HMAC-SHA256 signing secret (required, must not be empty) |
-| `access_ttl_seconds` | 3600 (1 h) | Access token lifetime |
+| `access_ttl_seconds` | 3600 (1 h); every shipped config sets 21600 (6 h) | Access token lifetime — also the BFF access cookie's `maxAge` (`expires_in`) |
 | `refresh_ttl_seconds` | 604800 (7 d) | Refresh token lifetime |
+
+A long access TTL keeps users signed in through a working day, but delays role/permission
+changes and user disabling: they take effect at the next refresh.
+
+Besides the local password, staff can sign in through **LDAP or OIDC** — every method ends in
+the same session described here. See [External Sign-In](external-auth.md).
 
 ---
 
@@ -78,6 +84,8 @@ sequenceDiagram
     "sub": "01J...",
     "tenant": "01J...",
     "roles": ["admin", "crm_user"],
+    "groups": ["sales", "sales_manager"],
+    "permissions": ["crm:*:read", "crm:crm:write"],
     "iat": 1705312200,
     "exp": 1705315800
 }
@@ -88,6 +96,10 @@ sequenceDiagram
 | `sub` | UUID string | User ID |
 | `tenant` | UUID string | Tenant/organisation ID |
 | `roles` | `[]string` | Effective role names for permission checks |
+| `groups` | `[]string` | Technical-name closure of the user's roles plus every role they transitively *belong to* — drives [field group gating](orm.md#field-level-group-gating) |
+| `permissions` | `[]string` | Role-derived permission codes, for the frontend's UI gating only — Go re-authorizes every call from the database, so a stale claim can't widen access |
+| `must_change_password` | bool | Set when the account must change its password before doing anything else (see below) |
+| `aud` | `[]string` | absent on staff tokens; `["website"]` on a [website visitor's](website.md#website-visitors) token. Every route group refuses the wrong kind (403) |
 | `iat` | Unix timestamp | Issued at |
 | `exp` | Unix timestamp | Expiry |
 
@@ -133,9 +145,11 @@ The `Identity` struct:
 
 ```go
 type Identity struct {
-    UserID   uuid.UUID
-    TenantID uuid.UUID
-    Roles    []string
+    UserID             uuid.UUID
+    TenantID           uuid.UUID
+    Roles              []string
+    Groups             []string // stamped onto the context via orm/access.WithGroups
+    MustChangePassword bool
 }
 ```
 
@@ -213,10 +227,22 @@ Accounts and roles are managed through dedicated, audited endpoints — never th
 
 Permissions follow the same route-derived `module:resource:action` convention as every other handler — see [Permissions](permissions.md).
 
-- **Creating a user** (`POST /api/v1/users {email}`) starts the account **locked**: no `password_hash` is set, so login is impossible until a separate credential-setting flow runs. Only `email` is writable via `PUT`. `password_hash` is never present in any request or response body.
+- **Creating a user** (`POST /api/v1/users`) with no password starts the account **locked**: its hash comes from discarded random bytes, so no password can match. Writable fields are the profile (email, username, name, surname, display name, job title, phone, the 7-column address) and `password`; a blank password on update leaves the credential unchanged. `password_hash` is never present in any request or response body. Email collisions among live users answer 409.
+- **Roles are assigned** through the `user_roles` junction (generic CRUD, unique `(user_id, role_id)`) — the User form's *Roles* tags field. A user may hold several roles, like directory groups.
 - **Creating a role** (`POST /api/v1/roles {name, description}`) starts with **no grants** — permissions are assigned through their own flow, not at creation time.
 - List responses use the same `{ data, total }` envelope as generic CRUD, so the frontend's `ApiClient` (see [View Engine](../frontend/view-engine.md)) consumes both uniformly.
-- There is deliberately no `DELETE` yet, and no permission-grant endpoint — both are left to their own purpose-built, audited flows rather than being folded into this API.
+- Permissions are granted to a role through its **Views** tab (`role_view_permission` rows), which the backend reconciles into real grants — see [Permissions](permissions.md#granting-rights-to-a-role). There is deliberately no `DELETE` on users or roles.
+
+---
+
+## Forced Password Change
+
+The default admin seeded on a fresh **production** database (`environment: "production"`) must
+change its password at first login. While `must_change_password` is set, the permission
+middleware answers every route with `403 PASSWORD_CHANGE_REQUIRED` — except `GET`/`PUT
+/api/v1/users/<own id>`, which is how the frontend's `/app/force-password-change` page sets the
+new password and clears the flag. Development databases skip this so the dev admin
+(`admin@eerp.local`) works out of the box.
 
 ---
 
@@ -236,7 +262,7 @@ Configuration](settings.md#multi-company-scoping) for the full mechanism.
 
 ## Multi-Tenancy
 
-Every entity that belongs to a tenant has a `tenant_id` column. The JWT middleware reads the `tenant` claim from the token and stamps it onto the request context (`orm/access.WithTenant`).
+Every entity that embeds `model.BaseModel` belongs to a tenant through its `tenant_id` column. The JWT middleware reads the `tenant` claim from the token and stamps it onto the request context (`orm/access.WithTenant`).
 
 The **generic CRUD layer isolates tenant-owned tables automatically**: any registered table with a `tenant_id` column has every read and write scoped to the caller's tenant, `tenant_id` is forced server-side on create and is immutable on update, and a missing tenant fails closed rather than running unscoped. See [ORM → Tenant isolation](orm.md#tenant-isolation) for the full contract.
 
@@ -250,7 +276,6 @@ Code that bypasses the generic layer and drops to the query builder (the `ListCo
 // Users — tenant-scoped accounts
 type Users struct {
     model.BaseModel          // uuid PK, created_at, updated_at, deleted_at
-    TenantID     uuid.UUID `db:"tenant_id"`
     Email        string    `db:"email"`
     PasswordHash string    `db:"password_hash"`
 }
@@ -292,7 +317,7 @@ See also: [Permissions](permissions.md), [HTTP Pipeline](http-pipeline.md).
 
 | Extension | How |
 |---|---|
-| External IdP (OAuth2/OIDC) | Replace `LoginHandler` with OIDC callback; map claims to `Identity` |
+| Another external sign-in method | Implement a method producing an `ExternalIdentity` and hand it to the shared `Provisioner` — see [External Sign-In](external-auth.md) |
 | Session-based auth | Replace JWT with server-side session store; keep the `Identity` context contract |
 | API keys | Issue long-lived tokens with restricted roles; validate via same middleware |
 | MFA | Add a second factor check between password validation and token issuance |

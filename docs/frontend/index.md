@@ -67,14 +67,19 @@ core-front/                          # frontend SERVICE (Next.js) — own proces
 └── apps/shell/                      # the Next.js App Router service (host)
     ├── next.config.mjs              # discovery codegen + resolve/transpile external module dirs
     ├── app/
-    │   ├── layout.tsx               # RootLayout: MUI cache + ThemeProvider + providers
-    │   ├── page.tsx + Menu.tsx      # landing menu: requireAuth, then permission-filtered apps + views
-    │   ├── (auth)/login/page.tsx    # login page (BFF)
-    │   ├── api/auth/                # BFF route handlers: login / logout / refresh
-    │   └── [...module]/page.tsx     # catch-all: registry → server-fetch → client renderer
+    │   ├── layout.tsx               # RootLayout: MUI cache + theme + i18n (shared with the site)
+    │   ├── (site)/                  # the public website: [[...slug]] pages, /login, /signup, /account, booking pages
+    │   ├── app/                     # the ERP, served under /app
+    │   │   ├── layout.tsx           #   ERP chrome: top bar, live channel, app-wide *OpsProviders
+    │   │   ├── page.tsx + Menu.tsx  #   landing menu (installed apps, permission-filtered)
+    │   │   ├── login/ settings/ appstore/ force-password-change/ website/
+    │   │   └── [...module]/page.tsx #   catch-all: registry → server-fetch → client renderer
+    │   ├── api/                     # BFF route handlers: auth, site-auth, pictures, attachments, …
+    │   ├── print/report/            # pdf-service print targets (no chrome)
+    │   └── database/management/     # master-key database manager (no session)
     ├── src/
     │   ├── lib/                     # server session (cookies → identity), server ApiClient factory
-    │   └── generated/               # generated-modules.ts — GITIGNORED, regenerated at build
+    │   └── generated/               # generated-modules(.client).ts + translations — GITIGNORED
     └── scripts/generate-modules.mjs # build-time module discovery codegen
 
 <repo>/core/modules/crm/             # a business module — discovered via module_root, relocatable
@@ -100,11 +105,26 @@ Reaching into `packages/core-front/src/*` directly from outside the package is f
 | Session (httpOnly cookie → identity) | **Server** (`next/headers` `cookies()`) |
 | Authorization (route/RSC guard) | **Server** |
 | Per-view interaction state (records, selection, draft, dirty, expanded) | **Client** (Zustand, seeded from server `initialData`) |
-| Cross-cutting UI (theme, sidebar, last route) | **Client** (Zustand `persist`) |
+| Cross-cutting UI (theme, palette, UI style, sidebar, last route) | **Client** (Zustand `persist`; the theme is also mirrored into the `eerp_theme` cookie so the server renders dark mode without a light flash) |
+| Live server state (presence, notifications) | **Client** (non-persisted stores fed by the [live channel](../core/live-channel.md)) |
 | Session mirror (identity + permissions, for UI gating only) | **Client** (Zustand `persist`) |
 | Mutations | **Server Actions** → Go → `revalidateTag(entity)` → server re-render |
 
-The client never calls Go. Reads come from the server through the Data Cache; writes go through Server Actions that call Go and then revalidate the affected cache tag.
+The client never calls Go — with one deliberate exception, the [live channel](../core/live-channel.md) WebSocket (and the master-key database manager). Reads come from the server through the Data Cache; writes go through Server Actions that call Go and then revalidate the affected cache tag.
+
+---
+
+## Look and feel
+
+- **Theme**: light/dark mode and a palette (Settings → Global settings → Colors). The default
+  palette is indigo on navy with every text color AA on its background; dark mode lightens the
+  primary until it reaches 4.5:1. Per device.
+- **UI style** (`pretty` | `performance`, per device): *pretty* adds motion — page blocks rise in,
+  cards, chips, list rows and graph tiles fade in, shadows and hover transitions; *performance*
+  turns every transition, animation, shadow and ripple off. Injected globally by `ErpUiStyle` in
+  the ERP layout only (menus and dialogs portal to `<body>`, so a wrapper style wouldn't reach them).
+- Transitions use the `motion` tokens (enter 240 ms, exit 160 ms); a slow server render shows a
+  progress bar and skeleton after 180 ms (`app/app/loading.tsx`).
 
 ---
 
@@ -138,14 +158,15 @@ These are the stable contracts every part of the frontend honors. The source of 
 |---|---|
 | Backend base URL | `{API_BASE}/api/v{API_VERSION}` — **server-side env only** (`API_BASE`, `API_VERSION`, default `1`). Never exposed to the browser. |
 | Module routes (Go) | `/{module}/` (list, create) + `/{module}/{id}` (get, update, delete). CRM contacts → `/crm/` + `/crm/{id}` |
-| Core routes (Go) | `GET /health`, `GET /ready`, `GET /modules` |
+| Core routes (Go) | `GET /health` (200 when serving and the database answers), `GET /api/v1/modules` |
 | Auth (Go) | `POST /auth/login {email, password}`; `POST /auth/refresh` |
-| Token TTLs | access **1h**, refresh **7d**, refresh **single-use** (rotation). See [Authentication](authentication.md). |
-| Error envelope (Go) | `{ "error": { "code": "UPPER_SNAKE", "message": "...", "request_id": "01J..." } }` |
+| Token TTLs | access **6h** (shipped configs), refresh **7d**, refresh **single-use** (rotation). See [Authentication](authentication.md). |
+| Error envelope (Go) | `{ "error": { "code": "UPPER_SNAKE", "message": "...", "request_id": "01J...", "fields"?: [...] } }` — a Server Action never throws it raw: `settleAction` returns it as a value (a production build would hide the message), and the bound actions rethrow an `ApiError` client-side |
+| ERP base path | the ERP lives under `/app`; module paths stay relative and `erpPath()` adds the base when a link is emitted |
 | Status map | 400 validation · 401 unauthenticated · 403 forbidden · 404 not found · 409 conflict · 500 `INTERNAL_ERROR` |
 | Permissions | DSL `module:resource:action` with segment wildcards. **Server** authorizes; **client** `<Can>` gates UI. See [View Engine](view-engine.md#permission-gate). |
 | Delete | Soft-delete by default ([ADR-003](../adrs/003-soft-delete.md)). |
-| View types (v1) | `form`, `tree`, `dashboard`. |
+| View types | `form`, `tree` (List / Kanban / Calendar / Graph modes), `dashboard`, `catalog`. |
 | Module FE contract | `module.json.static_files.views` lists `.ts` files that default-export a `FrontModule`. See [Module Discovery](module-discovery.md). |
 
 ---
@@ -156,3 +177,4 @@ These are the stable contracts every part of the frontend honors. The source of 
 - [Module Discovery](module-discovery.md) — how external module folders compile into the service at build time.
 - [Authentication (BFF)](authentication.md) — the login/session/refresh lifecycle across the BFF boundary.
 - [Creating a Frontend Module](../developer-guide/creating-a-frontend-module.md) — add a view to a module in practice.
+- [Website Builder](website-builder.md) — the public site's pages and blocks.

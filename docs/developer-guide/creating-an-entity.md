@@ -26,7 +26,7 @@ An entity is any Go struct that:
 ```go
 package inventory
 
-import "eerp/core/orm/model"
+import "core/orm/model"
 
 type Item struct {
     model.BaseModel

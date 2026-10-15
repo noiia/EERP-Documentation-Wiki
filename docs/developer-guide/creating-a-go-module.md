@@ -104,7 +104,7 @@ Entities embed `model.BaseModel`, which provides `id` (UUID), `created_at`, `upd
 package hr
 
 import (
-    "eerp/core/orm/model"
+    "core/orm/model"
     "time"
 )
 

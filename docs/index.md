@@ -69,11 +69,14 @@ graph TD
 | ORM | Custom (pgx v5) | Zero reflection at query time, ERP-specific features |
 | Module schema (optional) | Go → WASI (Wasmtime) | Sandboxed schema declaration via the `migrate()` ABI, when a module opts in; every shipped module today instead uses `"type": "go"` and the ORM's own auto-migration |
 | Module logic | Go (monolith) | Zero IPC overhead, full ORM access, single binary deploy |
-| Database | PostgreSQL 18 | Mature, feature-rich, excellent Go driver ecosystem |
+| Database | PostgreSQL 18 + PostGIS + `pg_trgm` | Mature, feature-rich; native geographic columns and trigram search indexes |
+| Read cache (optional) | Redis | Generation-counter invalidation, fails open — see [Redis Read Cache](core/query-cache.md) |
+| Messaging | NATS | Load-balances PDF rendering across `pdf-service` replicas; version probes |
+| Live updates | WebSocket (one per tab) | Presence and notifications — see [Live Channel](core/live-channel.md) |
 | Object storage | Garage (S3-compatible) | Pictures, signatures, generic attachments, and generated PDF reports |
 | PDF reports | Headless Chromium (`pdf-service`) | Real CSS/Tailwind fidelity, reuses the same descriptor model as on-screen views — see [ADR-011](adrs/011-pdf-report-generation.md) |
 | Gateway | nginx, TLS + HTTP/2 | Terminates TLS at the edge; HTTP/2 multiplexes the browser's many small relation-fetch requests — see [ADR-018](adrs/018-http2-edge-rest-batching.md) |
-| Frontend | React + Next.js (App Router) + TypeScript | Largest ecosystem and talent pool; runs on a dedicated front server (BFF) |
+| Frontend | React + Next.js (App Router) + TypeScript | Largest ecosystem and talent pool; runs on a dedicated front server (BFF) serving both the public website (`/`) and the ERP (`/app`) |
 | Frontend state | Zustand | Selector-based subscriptions avoid React Context re-render cascades; ~1 KB |
 
 ---
@@ -95,7 +98,17 @@ graph TD
 | Understand workspace settings, locale, tax mode | [Settings & Workspace Configuration](core/settings.md) |
 | Add a scheduled background job | [Background Cron Scheduler](core/cron.md) |
 | Generate a PDF report | [Reports & PDF Generation](core/reports.md) |
-| Deploy with Docker Compose | [Deployment → Docker Compose](developer-guide/deployment.md#docker-compose-recommended) |
+| Run EERP in production (Let's Encrypt, behind a reverse proxy…) | [Deployment & Bootstrap](developer-guide/deployment.md) |
+| Publish data and pages on the public website | [Website & Public Access](core/website.md) · [Website Builder](frontend/website-builder.md) |
+| Sell event seats or appointments | [Events & Booking](core/events.md) · [Payments](core/payments.md) |
+| Send an email | [Mail: Outbox & Templates](core/mail.md) |
+| Show progress or notify a user | [Notifications](core/notifications.md) · [Live Channel](core/live-channel.md) |
+| Sign staff in with LDAP / OIDC | [External Sign-In](core/external-auth.md) |
+| Store locations and zones | [Geographic Fields](core/geo.md) |
+| Keep big lists fast | [List Read Performance](core/list-performance.md) · [Redis Read Cache](core/query-cache.md) |
+| Manage several databases on one server | [Database Management](core/database-management.md) |
+| Know which version is running / add a service | [Versioning](core/versioning.md) |
+| Fill a workspace with demo data | [Demo Data](core/demo-data.md) |
 | Understand the edge gateway / TLS+HTTP2 | [Architecture → Edge Gateway](architecture/index.md#edge-gateway-api-gateway) |
 | Compare how pictures/attachments/reports use S3 | [Object Storage Across Layers](architecture/object-storage-topology.md) |
 | Write tests | [Testing](developer-guide/testing.md) |
@@ -106,30 +119,26 @@ graph TD
 ## Repository Layout
 
 ```
-eerp/
-├── core/                    # Go backend
-│   ├── cmd/app/main.go      # Entry point — wires DB, WASM loader, Go services
-│   ├── orm/                 # Custom ORM (public API)
+EERP/
+├── core/                         # Go backend (module "core")
+│   ├── cmd/app/main.go           # flags + config loading only
 │   ├── internal/
-│   │   ├── module/          # Hybrid module loader (WASM migrate ABI + Go service init)
-│   │   │   ├── detector.go  # Filesystem scan, dependency resolution, priority assignment
-│   │   │   ├── load.go      # Wasmtime instantiation, migrate() call, DDL application
-│   │   │   ├── migration.go # applyMigration — executes ALTER TABLE via pgx
-│   │   │   └── snapshot.go  # Change detection cache
-│   │   ├── types/           # Shared types (Config, Module, Migration, Operation)
-│   │   └── common/          # Logger, file utilities, dependency resolver
-│   └── modules/
-│       └── crm/             # CRM module — Go service (monolith business logic)
-│           └── internal/
-│               └── crm.go   # Contact entity + Service (Create/List/Update/Delete)
-├── core-front/              # Next.js front server (React + Zustand) — pnpm workspace
-│   ├── packages/core-front/ # @eerp/core-front engine (the frontend ABI):
-│   │   └── src/             #   api (ApiClient/BFF), views (descriptors, stores, renderers),
-│   │                        #   auth (permissions, guards), registry (FrontModule)
-│   └── apps/shell/          # Next.js App Router host service
-│       ├── app/             #   routes: layout, login, api/auth (BFF), [...module] catch-all
-│       └── src/             #   server session/ApiClient + generated module manifest (gitignored)
-├── compose.yml              # PostgreSQL dev environment
-├── eerp-config.json         # Runtime configuration (module_root, DB, pool)
-└── Makefile                 # Developer commands
+│   │   ├── app/                  # Build (wiring, routes) + Run (background jobs, serve)
+│   │   ├── module/               # module detection, loading, live lifecycle, App Store API
+│   │   ├── auth/ (+ providers/)  # sessions, users/roles admin, LDAP/OIDC sign-in
+│   │   ├── settings/ website/ notify/ presence/ mail/ payment/ …  # core services
+│   │   └── testdb/               # the one way tests reach the database
+│   ├── orm/                      # custom ORM (public facade: core/orm)
+│   └── modules/                  # business modules (crm, contact, sale, event, website, …)
+│       └── <name>/               #   module.json, module.go, views/, reports/, i18n/
+├── core-front/                   # Next.js service — pnpm workspace
+│   ├── packages/core-front/      #   @eerp/core-front: the view engine (the frontend ABI)
+│   └── apps/shell/               #   the host app: site (/), ERP (/app), BFF (/api)
+├── tools/
+│   ├── pdf-service/              # headless-Chromium PDF renderer (own image)
+│   └── eerp-init-module/         # module scaffolder
+├── infra/                        # bootstrap scripts, nginx, certbot, Garage
+├── compose.yml, compose.prod.yml # dev stack / production overrides
+├── eerp-config.*.example.json    # config templates (real configs are gitignored)
+└── Makefile                      # bootstrap, run, test, …
 ```

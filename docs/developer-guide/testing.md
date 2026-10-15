@@ -17,37 +17,27 @@ There is no third "mock database" level. Mocking the database produces tests tha
 
 ## Running Tests
 
-### All ORM unit tests
-
 ```bash
-make run-back-tests BACKTESTPATH=./orm/...
+make test                                             # everything the CI runs, stops at the first failure
+make run-back-tests                                   # all Go tests (starts db + garage, sets CONFIG)
+make run-back-tests BACKTESTPATH=./orm/...            # one package tree
+make run-back-tests ARGS="-v -run TestFindOne -timeout 10m"
+make run-deadcode                                     # the dead code gate alone
+make run-front-tests                                  # frontend lint + typecheck + tests
 ```
 
-### Integration tests (requires Docker database)
+`make test` runs, in order: the Go backend tests with Redis (`REDIS_URL` set, so the cache tests
+run too), the **dead code gate**, `pdf-service`'s tests, then the frontend's lint, typecheck and
+tests — the same checks as CI.
 
-Start the database first:
+!!! warning "The dead code gate"
+    CI fails on any Go function unreachable from `main` that isn't listed in
+    `.github/deadcode-allowlist.txt`. A helper used only by tests belongs in a `_test.go` file —
+    `export_test.go` to expose it to the package's external tests — not in production code.
 
-```bash
-docker compose up -d
-```
-
-Then run:
-
-```bash
-make run-back-tests BACKTESTPATH=./orm/pool/db/...
-```
-
-### Single test
-
-```bash
-make run-back-tests BACKTESTPATH=./orm/... ARGS="-run TestFindOne"
-```
-
-### All tests with verbose output
-
-```bash
-make run-back-tests BACKTESTPATH=./... ARGS="-v"
-```
+Always pass a `-timeout`: a killed `go test` can leave a Postgres session holding the schema
+advisory lock, and later migrations then wait forever (see
+[Getting Started → Troubleshooting](../getting-started.md#troubleshooting)).
 
 ---
 
@@ -116,51 +106,54 @@ For services that use the ORM, prefer integration tests with a real database ove
 
 ## Integration Tests: Repository
 
-Use a real test database. The recommended pattern:
+Database-backed tests use `core/internal/testdb`, one way for every package:
 
 ```go
-package crm_test
+package inventory // an in-package test: it can use the module's own types
 
 import (
     "context"
     "testing"
-    "eerp/core/orm"
-    "eerp/core/modules/crm/internal"
-    "eerp/core/testutil"
-    "github.com/stretchr/testify/assert"
-    "github.com/stretchr/testify/require"
+
+    "core/internal/testdb"
+    "core/orm"
+    "core/orm/model"
+
+    "github.com/google/uuid"
 )
 
-func TestContactCreate(t *testing.T) {
+func TestItemCreate(t *testing.T) {
+    app := testdb.Open(t)                       // (1) skipped when no database is configured
+    testdb.MigrateModules(t, app, "inventory")  // (2) the module's real schema
+
+    tenant := uuid.New()                        // (3) a fresh tenant: no collision with dev data
     ctx := context.Background()
-    db := testutil.OpenTestDB(t)           // (1)
-    defer testutil.CleanTable(t, db, "contacts") // (2)
+    repo := orm.MustRepo[Item](app.DB)
 
-    repo := orm.MustRepo[crm.Contact](db)
-
-    contact := crm.Contact{
-        Name:    "Alice Martin",
-        Email:   "alice@example.com",
-        Company: "Acme Corp",
-        Status:  "lead",
+    created, err := repo.Create(ctx, Item{BaseModel: model.BaseModel{TenantID: tenant}, Name: "Widget"})
+    if err != nil {
+        t.Fatal(err)
     }
-
-    created, err := repo.Create(ctx, contact)
-    require.NoError(t, err)
-
-    assert.NotEmpty(t, created.ID)
-    assert.Equal(t, "Alice Martin", created.Name)
-    assert.False(t, created.CreatedAt.IsZero())
-
-    // Verify it's findable
-    found, err := repo.FindByID(ctx, created.ID)
-    require.NoError(t, err)
-    assert.Equal(t, created.ID, found.ID)
+    t.Cleanup(func() { _, _ = repo.HardDelete(context.Background(), created.ID) }) // (4)
+    // … assertions …
 }
 ```
 
-1. `testutil.OpenTestDB(t)` opens a connection to the test database (same DSN as `eerp-config.json` by default, or `TEST_DSN` env var). It registers `t.Cleanup(db.Close)`.
-2. `testutil.CleanTable` truncates the table after the test. Alternatively, use transactions (see below).
+1. `testdb.Open(t)` connects to `TEST_DSN` (CI), else the database named in the config file
+   `CONFIG` points at (what `make run-back-tests` sets). With neither, the test is **skipped**, so
+   a plain `go test ./...` stays database-free. The connection closes when the test ends.
+2. On a fresh database, create the tables first: `testdb.MigrateModules(t, app, "auth", …)` for
+   modules' real schemas (blank-import each module's package so it registers), or
+   `testdb.Migrate(t, app, tables...)` for individually registered tables.
+3. Tests may run against the **live dev database**. Seed under a fresh `uuid.New()` tenant…
+4. …and clean up **only the rows you created**.
+
+!!! danger "Never `DELETE FROM <table>`"
+    A blanket delete or `TRUNCATE` in a test wipes the developer's dev data. Scope every cleanup to
+    the ids or the tenant the test created.
+
+The full app wiring is tested the same way: `internal/app/app_test.go` boots `app.Build` against
+the test database and drives real routes as the seeded dev admin.
 
 ---
 
@@ -171,7 +164,7 @@ The cleanest way to isolate integration tests is to wrap each test in a transact
 ```go
 func TestContactSoftDelete(t *testing.T) {
     ctx := context.Background()
-    db := testutil.OpenTestDB(t)
+    db := testdb.Open(t).DB
 
     var id uuid.UUID
 
@@ -207,7 +200,7 @@ Test complete use cases end-to-end with a real database:
 ```go
 func TestConvertToCustomer(t *testing.T) {
     ctx := context.Background()
-    db := testutil.OpenTestDB(t)
+    db := testdb.Open(t).DB
     svc := crm.New(db)
 
     // Arrange
@@ -278,8 +271,9 @@ func TestConditionRebasing(t *testing.T) {
 
 | Helper | Purpose |
 |---|---|
-| `testutil.OpenTestDB(t)` | Opens a real DB connection, registers cleanup |
-| `testutil.CleanTable(t, db, table)` | Truncates table after test |
+| `testdb.Open(t)` | The test database (`TEST_DSN`, else `CONFIG`, else skip), closed at test end |
+| `testdb.MigrateModules(t, app, names...)` / `testdb.Migrate(t, app, tables...)` | Create the schema a test needs on a fresh database |
+| `testdb.Config(t)` | The resolved app config, with `TEST_DSN`'s coordinates when set |
 | `t.Helper()` | Mark assertion helpers; errors point to call site |
 | `require.NoError(t, err)` | Stop test immediately on error |
 | `assert.Equal(t, want, got)` | Soft assertion (test continues) |

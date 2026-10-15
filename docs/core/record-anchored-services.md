@@ -25,7 +25,6 @@ anchored on `(tenant_id, table_name, record_id)`.
 ```go
 type ChatterMessage struct {
     model.BaseModel
-    TenantID    uuid.UUID `db:"tenant_id"`
     TableName   string    `db:"table_name"`
     RecordID    uuid.UUID `db:"record_id"`
     Kind        string    `db:"kind"` // "message" | "log"
@@ -58,7 +57,6 @@ names alongside descriptor structure and workspace `app_settings`.
 ```go
 type NotebookPage struct {
     model.BaseModel // soft-deletable — unlike Picture, no per-anchor uniqueness depends on absence
-    TenantID  uuid.UUID `db:"tenant_id"`
     TableName string    `db:"table_name"`
     RecordID  uuid.UUID `db:"record_id"`
     Title     string    `db:"title"` // ≤200 chars
@@ -86,7 +84,6 @@ tenant-wide.
 ```go
 type SavedFilter struct {
     model.BaseModel
-    TenantID uuid.UUID `db:"tenant_id"`
     UserID   uuid.UUID `db:"user_id"`
     Entity   string    `db:"entity"`
     Name     string    `db:"name"`

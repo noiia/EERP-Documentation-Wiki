@@ -16,7 +16,6 @@ weighed.
 // core/modules/cron — table: cron
 type Cron struct {
     model.BaseModel
-    TenantID              uuid.UUID  `db:"tenant_id"`
     Name                  string     `db:"name"`
     ActionID              string     `db:"action_id"`   // matches a registered Action.ID; not validated at write time
     ActionCode            string     `db:"action_code"`  // resolved from the registry on POST/PUT, read-only otherwise
@@ -29,7 +28,6 @@ type Cron struct {
 // table: cron_history
 type CronHistory struct {
     model.BaseModel
-    TenantID     uuid.UUID `db:"tenant_id"`
     CronID       uuid.UUID `db:"cron_id"`
     Failed       bool      `db:"failed"`
     LogsFilepath string    `db:"logs_filepath"` // local disk, not S3 — see ADR-016
@@ -105,6 +103,9 @@ flowchart TD
 - **Retention is a hard delete.** `SweepHistory` runs on the same ticker as scheduling and actually
   removes rows and log files past the cron's own `HistoryRetentionYears` (a soft-deleted row would
   still count as "history" for any measure that matters for reclaiming space).
+- **Every run is a notification.** With the notifier wired (`App.Run`), each run is a `cron`
+  [activity](notifications.md) (indeterminate progress, linking to `/cron/<id>`) visible to the
+  roles holding the `cron` category, and a **failed** run also notifies its run-as user personally.
 - **Logs live on local disk**, under `Config.CronLogDir` — a cron's log is small, workspace-internal
   text, not user data worth S3's durability guarantees. A multi-instance deployment needs a shared
   volume for downloads to work from every instance.

@@ -83,7 +83,6 @@ import (
 // The table name is derived from the struct name: "employee".
 type Employee struct {
     model.BaseModel
-    TenantID    uuid.UUID `db:"tenant_id"` // owning tenant; set server-side
     Name        string    `db:"name"`
     Department  string    `db:"department"`
     SalaryCents int64     `db:"salary_cents"` // integer cents — never float

@@ -116,7 +116,7 @@ flowchart TD
 
 ## Permission Repository
 
-`PermissionRepository.Has(roles []string, permission string) bool` is the single entry point for permission checks. It:
+`PermissionRepository.Has(ctx, roles []string, permission string) (bool, error)` is the single entry point for permission checks. It:
 
 1. Queries `permissions JOIN role_permissions JOIN roles WHERE r.name IN (roles...)`.
 2. Evaluates both the exact permission code and all applicable wildcard patterns.
@@ -156,6 +156,8 @@ erDiagram
         string module
     }
     user_roles {
+        uuid id PK
+        uuid tenant_id
         uuid user_id FK
         uuid role_id FK
     }
@@ -163,18 +165,55 @@ erDiagram
         uuid role_id FK
         uuid permission_id FK
     }
+    role_view_permission {
+        uuid id PK
+        uuid role_id FK
+        string entity
+    }
+    role_view_permission_right {
+        uuid role_view_permission_id FK
+        uuid account_role_type_id FK
+    }
 
     users ||--o{ user_roles : has
     roles ||--o{ user_roles : granted_to
     roles ||--o{ role_permissions : grants
     permissions ||--o{ role_permissions : granted_by
+    roles ||--o{ role_view_permission : "Views tab"
+    role_view_permission ||--o{ role_view_permission_right : "read / write / delete / deny"
 ```
 
-`user_roles` and `role_permissions` use composite primary keys and carry no `BaseModel` — they are pure join tables.
+`role_permissions` is a pure join table (composite primary key) — what `PermissionRepository.Has`
+reads. `user_roles` is a soft-deletable generic-CRUD table (hand-written unique index on
+`(user_id, role_id)`), so the User form's *Roles* tags widget assigns roles with no bespoke
+endpoint. Roles can also **belong to** other roles (`role_belongs`): a user's group closure
+includes every role they transitively belong to, which [field group gating](orm.md#field-level-group-gating)
+and [notification categories](notifications.md#who-sees-what) use.
+
+### Granting rights to a role
+
+Admins never edit permission codes by hand. The Role form's **Views** tab lists one
+`role_view_permission` row per entity the role may use (picked from the live catalog at
+`GET /api/v1/views` — every route prefix on the generic CRUD surface), each with a set of
+rights: `read`, `write`, `delete`, `deny`.
+
+`core/modules/auth`'s `RightsHandler` overrides the writes on those two tables and, after each
+one, **reconciles** `role_permissions` for that `(role, entity)`: `<entity>:<entity>:<right>` is
+granted exactly when the right is ticked, revoked otherwise (permission rows are created on
+demand), then the permission cache is flushed. `deny` grants nothing — it is the absence of a
+grant. A newly added view defaults to read + write + delete. `BackfillAll` re-runs the
+reconciliation for every row at boot, so the two tables can't drift.
+
+!!! note "Wildcard and non-entity grants"
+    The Views tab manages only `<entity>:<entity>:<action>` codes. Wildcards (`*:*:*`,
+    `crm:*:read`) and non-entity codes (`settings:views:write`, `dev_seed:dev_seed:write`) are
+    granted by seeding or SQL. The seeded admin role holds `*:*:*`.
 
 ### Seeding permissions
 
-Permissions are created by inserting rows into the `permissions` table directly (via API or migration). There is no automatic seeding from `module.json` — permission codes must be created and assigned to roles manually.
+Permission rows are created on demand — by the reconciliation above, or by seeding (the default
+roles and the dev admin, `internal/auth/seed.go`). There is no automatic seeding from
+`module.json`.
 
 ---
 

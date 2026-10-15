@@ -49,36 +49,56 @@ The global middleware (RequestID, Logger, Recover, Body Limit, CORS) applies to 
 
 ## Route Groups
 
-Routes are divided into two groups mounted under `/api/v1`:
+Every route lives under `/api/v1`. Groups differ only in which middleware guards them:
 
-### Public auth group
-
-Mounted at `/api/v1/auth` with **no authentication middleware**, but **rate-limited per client IP** (`ormserver.AuthRateLimiter`) to blunt credential brute-forcing:
-
-| Method | Path | Purpose |
+| Group | Middleware | Examples |
 |---|---|---|
-| `POST` | `/api/v1/auth/login` | Validate credentials, issue access + refresh tokens |
-| `POST` | `/api/v1/auth/refresh` | Exchange a valid refresh token for a new pair |
-| `POST` | `/api/v1/auth/logout` | Revoke all refresh tokens for the user, clear cookie |
+| **Public auth** | auth rate limit | `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/methods`, `/auth/ldap/login`, `/auth/oidc/...` ([External Sign-In](external-auth.md)) |
+| **Protected** | JWT → permission → (generic CRUD) active gate | every generic CRUD table ([Automatic Router](router.md)), `/settings/*`, `/users`, `/roles`, `/pictures`, `/notebook_pages`, `/mail_outbox`… |
+| **Self-service** | JWT only | `/me/preferences`, `/me/event_feed`, `/notifications`, `/versions` — they act on the caller's own data, so a permission would only lock users out of it |
+| **Live channel** | `JWTOrCookieMiddleware` | `/presence` (REST + WebSocket upgrade, [Presence & the Live Channel](live-channel.md)) |
+| **Public website** | public rate limit + site tenant | `/public/*` — published data, site files, booking reads, payment webhooks ([Website](website.md)) |
+| **Website visitors** | public rate limit + visitor token (`aud: website`) | `/website/auth/*`, `/website/me`, `/website/bookings` |
+| **Database management** | auth rate limit; each handler checks `X-Master-Key` | `/database-management/*` ([Database Management](database-management.md)) |
+| **Calendar feed** | auth rate limit; the token in the URL is the credential | `/calendar/<token>.ics` |
 
-### Protected API group
+Tables excluded with `orm.WithExcluded()` (e.g. the auth tables) get **no** generic routes.
+Every server built on `core/orm/server` also answers `GET /health` (outside `/api/v1`): 200 once
+it serves **and** its pool pings Postgres within 2 s, else 503 — the Compose healthcheck and the
+gateway's `/health` use it.
 
-All other `/api/v1/*` routes are mounted with JWT middleware → Permission middleware applied as Echo group middleware. Every registered ORM table gets CRUD routes in this group — see [Automatic Router](router.md). Tables excluded with `orm.WithExcluded()` (e.g. the auth tables) get **no** routes here.
+### Request body limits
+
+`request_body_limit` (default `1M`) caps every body. The upload routes (`/api/v1/pictures`,
+`/api/v1/attachments`) are exempt (`ormserver.Config.BodyLimitExempt`) and capped by
+`upload_body_limit` (default `20M`) instead; the database restore upload has a fixed 2 GB cap.
+Over the limit → `413`. The gateway allows 50 MB; the frontend proxy skips the upload BFF
+routes because Next buffers proxied bodies only up to 10 MB.
+
+!!! warning "Adding an upload route"
+    Add it to `BodyLimitExempt` and give it the upload limit, or it stays at 1 MB.
 
 ---
 
 ## Rate Limiting
 
-The public auth group is protected by an in-memory, per-client-IP rate limiter (`ormserver.AuthRateLimiter`), built on Echo's `RateLimiter` middleware with a token-bucket memory store. It exists to blunt credential brute-forcing against `/api/v1/auth/login` (and the other auth endpoints).
+In-memory, per-client-IP token buckets (`ormserver.AuthRateLimiter`, Echo's `RateLimiter`):
 
-| Setting | Default | Config field |
-|---|---|---|
-| Requests per minute per IP | 20 | `auth_rate_limit_per_minute` |
-| Burst | = per-minute value | — |
-| Response when exceeded | `429 Too Many Requests` | — |
+| Limiter | Default | Config field | Applies to |
+|---|---|---|---|
+| Auth | 20/min | `auth_rate_limit_per_minute` | auth group, website signup/login, database management, calendar feed |
+| Public | 300/min | `public_rate_limit_per_minute` | `/api/v1/public`, `/api/v1/website` |
+
+Exceeding a limit returns `429 Too Many Requests`; the burst equals the per-minute value.
+
+The client IP is read from `X-Forwarded-For`, **trusting only loopback, link-local and private
+hops** (`echo.ExtractIPFromXFFHeader(echo.TrustPrivateNet(true))`). Behind the bundled gateway
+this is automatic; behind another reverse proxy, the gateway must be told to trust it, or every
+visitor shares one bucket ([Deployment](../developer-guide/deployment.md)).
 
 !!! note "Per-process, in-memory"
-    The limiter state is per server instance. For a horizontally-scaled deployment — or for account-level lockout rather than per-IP — back it with a shared store (e.g. Redis). The client IP is taken from Echo's `RealIP()`, so a correct proxy/`X-Forwarded-For` configuration is required behind a load balancer.
+    The limiter state is per server instance. For a horizontally-scaled deployment — or for
+    account-level lockout rather than per-IP — back it with a shared store (e.g. Redis).
 
 ---
 
@@ -123,21 +143,32 @@ All authentication and authorisation errors follow a uniform JSON envelope:
     "error": {
         "code": "UNAUTHENTICATED",
         "message": "missing or invalid token",
-        "request_id": "01J..."
+        "request_id": "01J...",
+        "fields": ["name"]
     }
 }
 ```
 
+`fields` is present only on a `VALIDATION_ERROR` naming columns.
+
 | `code` value | HTTP status | Condition |
 |---|---|---|
 | `UNAUTHENTICATED` | 401 | Missing token, invalid signature, expired token |
-| `FORBIDDEN` | 403 | Valid identity but insufficient permissions, or an underivable permission (fail-closed) |
-| — | 429 | Auth rate limit exceeded (see [Rate Limiting](#rate-limiting)) |
+| `FORBIDDEN` | 403 | Valid identity but insufficient permissions, an underivable permission (fail-closed), or the wrong token audience |
+| `PASSWORD_CHANGE_REQUIRED` | 403 | The account must change its password first ([Authentication](authentication.md#forced-password-change)) |
+| `MODULE_INACTIVE` | 403 | The table belongs to a deactivated module ([Module System](module-system.md#live-activation-no-restart)) |
+| `VALIDATION_ERROR` | 400 | Bad input; on a generic create, `fields` lists the missing required columns |
+| `NOT_FOUND` | 404 | Unknown id, other tenant's id, or unpublished public table |
+| `CONFLICT` | 409 | Unique violation, a booking seat already taken, a seed already running… |
+| — | 413 | Body over its limit |
+| — | 429 | Rate limit exceeded (see [Rate Limiting](#rate-limiting)) |
 
 The `request_id` field is the value injected by the RequestID middleware, allowing correlation with access logs.
 
-!!! note "Response envelope"
-    The error envelope above is used for auth errors. Successful ORM CRUD responses return the entity or list directly as JSON — there is no outer `{data, meta}` wrapper.
+!!! note "Success envelope"
+    A generic list returns `{data, total}` (plus `total_estimated: true` past 10 000 rows — see
+    [List Read Performance](list-performance.md)); a single record is returned directly. Hand-written
+    list endpoints mimic the same envelope so the frontend's `ApiClient` needs no special case.
 
 ---
 
@@ -148,7 +179,9 @@ Each middleware enriches the Echo context passed down the chain:
 | Key | Added by | Contents |
 |---|---|---|
 | Request ID | RequestID middleware | UUID for this request (also set as `X-Request-ID` response header) |
-| Identity | JWT middleware | Authenticated `auth.Identity{UserID, TenantID, Roles}` |
+| Identity | JWT middleware | Authenticated `auth.Identity{UserID, TenantID, Roles, Groups, MustChangePassword}` |
+| Groups | JWT middleware | The caller's role-group closure (`orm/access.WithGroups`), read by field group gating |
+| Public scope | public group | `access.PublicScope` — the published fields and forced filter of the table being read |
 | Tenant | JWT middleware | The caller's tenant ID (`orm/access.WithTenant`), read by the CRUD layer for row-level isolation |
 
 Handlers retrieve the identity via typed accessors (see [Authentication](authentication.md#identity-in-context)):
@@ -215,5 +248,5 @@ flowchart LR
 |---|---|
 | Rate limiting | Built-in per-IP limiter on the auth group (`ormserver.AuthRateLimiter`); swap the memory store for a shared one (Redis) to scale horizontally |
 | Custom middleware | Use `e.Use()` for global or `g.Use()` for group-scoped Echo middleware |
-| WebSocket support | Register a dedicated WS handler on a separate Echo group before the protected group |
+| WebSocket support | Reuse the live channel ([Presence & the Live Channel](live-channel.md)) — add a frame type rather than a second socket |
 | Request tracing | Enrich the RequestID middleware to propagate W3C Trace Context headers |

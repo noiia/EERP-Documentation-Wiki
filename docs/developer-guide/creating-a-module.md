@@ -141,7 +141,7 @@ modules/hr/
 package hr
 
 import (
-    "eerp/core/orm/model"
+    "core/orm/model"
     "time"
 )
 

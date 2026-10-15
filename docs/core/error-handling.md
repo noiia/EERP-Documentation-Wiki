@@ -64,7 +64,7 @@ Infrastructure errors:
 The ORM returns typed sentinel errors for common conditions:
 
 ```go
-import "eerp/core/orm"
+import "core/orm"
 
 contact, err := contacts.FindByID(ctx, id)
 if errors.Is(err, orm.ErrNotFound) {

@@ -1,175 +1,92 @@
 # Getting Started
 
-This guide walks you through running EERP locally and making your first change.
-
----
+This guide gets EERP running on your machine and points you at your first change.
 
 ## Prerequisites
 
-| Tool | Minimum version | Purpose |
+| Tool | Version | Purpose |
 |---|---|---|
-| Go | 1.26 | Backend runtime, and module WASM cross-compilation (see note below) |
-| Docker / Docker Compose | v2 | PostgreSQL dev database + Garage (object storage) |
-| Node.js | 20+ | Next.js front server (dev and prod runtime) |
-| Make | any | Developer task runner |
+| Docker + Docker Compose | v2 | the whole dev stack (database, object storage, Redis, NATS, mail catcher, backend, gateway) |
+| Go | 1.26 | backend tests and tooling |
+| Node.js + pnpm | Node 20+, pnpm via `npx -y pnpm@<version>` works | frontend dev server and tests |
+| Make, `openssl` | any | task runner, secret generation |
 
 !!! note "No Rust toolchain needed"
-    Module WASM binaries are **Go source cross-compiled to WASI** (`GOOS=wasip1 GOARCH=wasm go
-    build`), not Rust — see [Module System](core/module-system.md#module-anatomy). You only
-    need the Go toolchain already listed above. In practice you won't even need that: every
-    module shipped today has `"type": "go"` in its `module.json`, so it compiles straight into
-    the core binary and the WASM build step never runs for it.
+    Module WASM binaries are **Go source cross-compiled to WASI**, and every module shipped today
+    is `"type": "go"` (compiled into the core binary), so the WASM build never runs in practice.
+    See [Module System](core/module-system.md#module-anatomy).
 
----
-
-## Clone and Configure
+## 1. Clone and bootstrap
 
 ```bash
 git clone https://github.com/noiia/EERP.git
 cd EERP
+make bootstrap
 ```
 
-Copy and adjust the runtime configuration:
+`make bootstrap` (`infra/bootstrap.sh`) does everything a fresh checkout needs, idempotently:
+
+- generates missing secrets into the gitignored `.env` (database password, `master_key`, S3 key
+  pair, Garage RPC secret);
+- creates `eerp-config.json` and `eerp-config.docker.json` from their `*.example.json` templates
+  and fills in those secrets;
+- starts every service and waits until each is healthy;
+- installs `pg_trgm` (PostGIS comes with the database image);
+- bootstraps Garage (bucket + access key).
+
+Run it again any time — it only fills what's missing. `ROTATE=1 make bootstrap` regenerates the
+secrets in place (data kept). See [Deployment & Bootstrap](developer-guide/deployment.md#use-case-1-local-development).
+
+## 2. Open it
+
+| URL | What |
+|---|---|
+| `https://localhost/` | the public website (self-signed certificate — accept it once) |
+| `https://localhost/app` | the ERP — sign in as **`admin@eerp.local` / `admin`** |
+| `http://127.0.0.1:8025` | Mailpit: every email the stack sends |
+
+The dev admin is seeded automatically; with `environment: "development"` it isn't forced to change
+its password.
+
+## 3. Day-to-day commands
 
 ```bash
-cp eerp-config.json.example eerp-config.json
+make run              # dev stack + backend container + Next.js dev server (hot reload) on :3000
+make run-back         # (re)start only the backend container
+make run-front-dev    # only the Next.js dev server
+make logs             # follow the stack's logs
+make test             # every CI check: Go (+ Redis tests), dead code gate, pdf-service, frontend
 ```
 
-The only fields you typically need to change locally are `module_root` (absolute path to where your compiled modules live) and `master_key` (used for signing tokens). See [Configuration](core/configuration.md) for a full reference.
-
----
-
-## Start the Database
+The backend runs in Docker in dev; the frontend dev server runs on the host for fast reloads.
+Run a subset of the Go tests with:
 
 ```bash
-docker compose up -d
+make run-back-tests BACKTESTPATH=./orm/... ARGS="-v -run TestFindOne"
 ```
 
-This starts PostgreSQL 18 on `localhost:5432` with:
+See [Testing](developer-guide/testing.md) for the database-backed test rules.
 
-- Database: `poc`
-- User: `postgres`
-- Password: `postgres`
+## 4. Fill it with data
 
----
+Settings → **Developer** seeds fake data: a *light* set through the normal API (a few records of
+everything, pictures, a full Event demo), or the *full* volume (~100 000 rows per business table,
+run in the background with live progress under the bell). See [Demo Data](core/demo-data.md).
 
-## Object Storage (optional)
+## 5. Make a change
 
-Picture and signature fields need S3-compatible object storage. Locally this is [Garage](https://garagehq.deuxfleurs.fr/), started as part of `docker compose up -d` and bootstrapped once with:
+- Scaffold a module: `go run ./tools/eerp-init-module -p core/modules/<name> -t go` — it writes
+  `module.json`/`module.go` and the frontend `views/`, wires the module into `core/modules/all`,
+  and links it into the frontend workspace. Then follow
+  [Building a Module From Scratch](developer-guide/module-from-scratch.md).
+- Read [Architecture Overview](architecture/index.md) for how the layers fit, and [ORM](core/orm.md)
+  for database access.
 
-```bash
-make garage-init
-```
+## Troubleshooting
 
-Skip this if you don't need picture/signature widgets — everything else runs without it. See [Object Storage](core/object-storage.md) for the full config reference.
-
----
-
-## Run Everything
-
-```bash
-make run
-```
-
-This target starts three processes in sequence:
-
-1. Database (Docker, if not already running)
-2. Backend (`go run ./cmd/app/...`)
-3. Frontend (`npm run dev` — Next.js front server on `:3000`)
-
-### Run only the backend
-
-```bash
-make run-back
-```
-
-### Run only the frontend
-
-```bash
-make run-front
-```
-
----
-
-## Build WASM Modules (optional)
-
-A module opts into the WASM-loaded path by setting `"type": "wasm"` in its `module.json`; the core
-cross-compiles it — Go source, not Rust — to WebAssembly System Interface (WASI) via `GOOS=wasip1
-GOARCH=wasm go build`. To build every such module:
-
-```bash
-make build
-```
-
-The compiled `.wasm` binaries are placed into the module directories, and the module loader
-auto-discovers them on startup. **You can skip this step entirely for local development**: every
-module shipped in this repository today has `"type": "go"`, compiles straight into the core
-binary, and never touches the WASM path. See [Module System → The WASM/WASI
-path](core/module-system.md#module-anatomy) for when you'd actually reach for `"type": "wasm"`.
-
----
-
-## Project Startup Sequence
-
-When you run the backend, the following happens in order:
-
-```mermaid
-sequenceDiagram
-    participant Main as main.go
-    participant Config as Config Loader
-    participant DB as PostgreSQL
-    participant ML as Module Loader
-    participant WASM as WASM Runtime
-
-    Main->>Config: Read eerp-config.json
-    Config-->>Main: Config struct
-    Main->>DB: Open connection pool (pgxpool)
-    DB-->>Main: *orm.DB
-    Main->>ML: LoadModules(config, db)
-    ML->>ML: Scan module_root for module.json files
-    ML->>ML: Resolve dependency order
-    loop Per priority group (concurrent)
-        ML->>WASM: Instantiate .wasm binary
-        WASM-->>ML: Instance
-        ML->>WASM: Call migrate() + migrate_len()
-        WASM-->>ML: Migration JSON pointer
-        ML->>DB: Apply schema migrations (ALTER TABLE)
-    end
-    Main->>Main: Start HTTP server
-```
-
----
-
-## Seeding Demo Data
-
-Settings → Developer (`/settings/developer`) has a "Seed demo data" button that creates a batch of fake contacts, CRM records, and tags through the ordinary generic entity API — useful for quickly populating a local workspace to click around in. It's a **development-only** tool: the button is disabled outside dev, and the underlying Server Action independently refuses to run when `NODE_ENV=production`, so it can't be reached against a real tenant by any path.
-
----
-
-## Running Tests
-
-### Unit tests (no database required)
-
-```bash
-make run-back-tests BACKTESTPATH=./orm/...
-```
-
-### Integration tests (requires Docker database)
-
-```bash
-make run-back-tests BACKTESTPATH=./orm/pool/db/...
-```
-
-### Single test by name
-
-```bash
-make run-back-tests BACKTESTPATH=./orm/... ARGS="-run TestFindOne"
-```
-
----
-
-## Next Steps
-
-- Read [Architecture Overview](architecture/index.md) to understand how the layers relate.
-- Read [Building a Module From Scratch](developer-guide/module-from-scratch.md) to scaffold and wire up your first module end to end.
-- Read [ORM](core/orm.md) to understand how to work with the database.
+| Symptom | Fix |
+|---|---|
+| backend refuses to boot: `master_key is empty or set to the insecure default` | run `make bootstrap` (it fills the config) |
+| browser certificate warning on `https://localhost` | expected in dev (self-signed); accept it |
+| tests hang while migrating | a killed `go test` left a Postgres session holding the schema advisory lock: find it with `docker exec db psql -U postgres -d poc -Atc "SELECT pid FROM pg_locks WHERE locktype='advisory'"`, `SELECT pg_terminate_backend(<pid>)`, and always pass `-timeout` |
+| no emails arrive | open Mailpit (`127.0.0.1:8025`); dev never sends real mail |

@@ -81,7 +81,7 @@ func S3Configured(cfg *types.Config) bool // true iff s3_endpoint and s3_bucket 
 
 ## Configuration
 
-Five fields on `types.Config` (see [Configuration → Field Reference](configuration.md#field-reference)), all optional as a set:
+Five fields on `types.Config` (see [Configuration → Field Reference](configuration.md#optional-services)), all optional as a set:
 
 | Field | Type | Description |
 |---|---|---|

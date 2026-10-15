@@ -359,9 +359,21 @@ Consequences worth knowing when working in this area:
 - A deactivated module's table still exists and is still migrated at boot — "deactivated" means inaccessible via the generic CRUD surface, not unloaded. Data written before deactivation reappears the moment the module is reactivated.
 - Table ownership (which module's flag gates which table) is **attributed, not declared**: the first module whose migration creates a table is recorded as its owner. A module that only adds columns to another module's table (`ExtendSchema`/`orm.WithTableName` inheritance) never claims ownership of it — deactivating it has no effect on the table it extends.
 - `POST /api/v1/modules/:id/reload` re-reads a WASM module's `.wasm` file from disk into a fresh Wasmtime `Store` and re-runs its migration — a real hot-swap. For a Go module (statically compiled into the backend binary) there is nothing to hot-swap; `Reload` re-validates schema registration as a no-op and says so in the log, rather than pretending a reload occurred.
+- `GET /api/v1/modules/:id/logs` returns every activate / deactivate / reload run's backend and database log lines, grouped by operation — the App Store's *Logs* button.
+- The website's public API and payment providers check the same live state: a deactivated module's tables read as unpublished (404) on `/api/v1/public`, and its payment provider is never offered.
+- A module may run `Boot()` more than once in one process ([database switch](database-management.md)), so a Go module's table creation is decided from the **target database's real state**, never from an in-memory "already done" flag — otherwise a second boot against an empty database creates nothing.
 - This only reaches modules already known at the **last build** — a module folder that didn't exist at that build has no mounted route at all yet, on either side. Truly unseen-code hot-install remains deferred, larger infrastructure.
 
 The management API this backs (`PUT /api/v1/modules/:id`, the App Store UI) and the reasoning behind each constraint are recorded in [ADR-009: Module Lifecycle via API](../adrs/009-module-lifecycle-api.md) and [ADR-010: Live Module Lifecycle](../adrs/010-live-module-lifecycle.md).
+
+---
+
+## Concurrent migrations
+
+All schema DDL — at boot, and in `EnsureSchema` / `MigrateModules` for tests — runs under a
+Postgres **advisory lock** (`withSchemaLock`). `CREATE TABLE IF NOT EXISTS` is not safe when
+several processes migrate one database at once (two `core-back` replicas starting together, or
+parallel test packages), and the lock serializes them.
 
 ---
 

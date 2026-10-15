@@ -1,165 +1,122 @@
 # Configuration
 
-EERP uses a single JSON file as its sole configuration source. There is no environment variable inheritance, no multi-file override chains, and no runtime mutation of configuration.
+EERP reads one JSON file at boot. No environment-variable overrides, no layered files, no
+runtime mutation: the effective configuration is exactly what the file says, validated before
+anything starts. The **frontend build reads the same file** (its `module_root`) to discover
+modules, so one file describes the deployment for both sides.
 
----
+## Which file
 
-## Purpose
+| File | Used by | Created by |
+|---|---|---|
+| `eerp-config.json` | host-native dev (`make run-back`), tests, frontend build | `make bootstrap`, from `eerp-config.example.json` |
+| `eerp-config.docker.json` | the dev Compose stack | `make bootstrap`, from `eerp-config.docker.example.json` |
+| `eerp-config.prod.json` | production Compose | `make bootstrap-prod` |
 
-Configuration complexity is a common source of deployment bugs. A value set in an environment variable overrides a file, which overrides a default, and the effective configuration becomes hard to reason about. EERP's approach: one file, one source of truth, validated at startup.
+All three are **gitignored** — they hold secrets. Only the `*.example.json` templates are
+committed. The bootstrap scripts fill `master_key`, `db_password` and the `s3_*` keys with
+generated secrets ([Deployment](../developer-guide/deployment.md)).
 
----
-
-## Configuration File
-
-The file path is passed via the `-config` CLI flag:
+The backend takes the path with `-config`:
 
 ```bash
-go run ./cmd/app/... -config="../../eerp-config.json"
+go run ./cmd/app -config="../../eerp-config.json"
 ```
 
-### Full Reference
+**Relative paths** (`module_root`, `api_config_path`, `cron_log_dir`) are anchored to the
+**config file's directory**, not the process's working directory — the app (run from
+`core/cmd/app`), the tests (from `core`) and the frontend build (from `core-front`) all resolve
+`core/modules` to the same place. Prefer repo-relative paths.
 
-```json
-{
-    "module_root": ["/absolute/path/to/modules"],
-    "master_key": "change-me-in-production",
-    "db_name": "poc",
-    "db_port": 5432,
-    "db_host": "localhost",
-    "db_user": "postgres",
-    "db_password": "postgres",
-    "max_connection": 10,
-    "min_connection": 4,
-    "max_conn_idle_time": 1800,
-    "max_conn_life_time": 3600,
-    "health_check_period": 60,
-    "connect_timeout": 10,
-    "allowed_origins": ["https://app.example.com"],
-    "request_body_limit": "1M",
-    "auth_rate_limit_per_minute": 20
-}
-```
+## Reference
 
-### Field Reference
+### Core
 
-| Field | Type | Description |
+| Key | Default | Meaning |
 |---|---|---|
-| `module_root` | `[]string` | Absolute paths to directories the module loader scans for `module.json` files |
-| `master_key` | string | Signing key for tokens and encrypted fields; **never commit to version control** |
-| `db_name` | string | PostgreSQL database name |
-| `db_port` | int | PostgreSQL port |
-| `db_host` | string | PostgreSQL host |
-| `db_user` | string | PostgreSQL user |
-| `db_password` | string | PostgreSQL password |
-| `max_connection` | int | Maximum pool connections (maps to `orm.Config.MaxConns`) |
-| `min_connection` | int | Minimum idle pool connections (maps to `orm.Config.MinConns`) |
-| `max_conn_idle_time` | int (seconds) | Close connections idle longer than this |
-| `max_conn_life_time` | int (seconds) | Recycle connections older than this |
-| `health_check_period` | int (seconds) | How often to ping idle connections |
-| `connect_timeout` | int (seconds) | Per-connection establishment timeout |
-| `allowed_origins` | `[]string` | CORS allow-list for browser clients. **Empty falls back to `*` (dev only)** — set the frontend origin(s) in production |
-| `request_body_limit` | string | Max request body size, e.g. `"1M"`, `"512K"`. Defaults to `"1M"` |
-| `auth_rate_limit_per_minute` | int | Per-IP request cap on the `/api/v1/auth/*` endpoints. Defaults to `20` |
-| `s3_endpoint` | string | S3-compatible endpoint URL for picture/signature storage. Optional — see [Object Storage](object-storage.md) |
-| `s3_region` | string | Region string sent to the S3 client. Optional |
-| `s3_bucket` | string | Bucket for picture/signature objects. Optional |
-| `s3_access_key` | string | S3 access key. Optional |
-| `s3_secret_key` | string | S3 secret key. Optional |
-| `pdf_service_url` | string | Base URL of the standalone `pdf-service` (headless Chromium). Required for report generation — see [Reports & PDF Generation](reports.md) |
-| `nats_url` | string | NATS server URL for horizontal `pdf-service` scaling via request-reply. Optional — synchronous HTTP is used when unset |
-| `frontend_base_url` | string | The `core-front` origin the backend navigates `pdf-service`'s headless browser to when rendering a report |
-| `cron_log_dir` | string | Local directory for [cron](cron.md) run logs. Defaults to `cron_logs`, resolved the same way as `module_root` |
-| `seed_dev_admin` | bool | Dev-only: seeds a default admin account at startup so there's something to log in with locally. Never set in production |
+| `environment` | **required** | exactly `development` or `production`; anything else refuses to boot. `development` enables demo seeding; `production` forces the seeded default admin to change its password at first login |
+| `module_root` | **required** | directories scanned for `module.json` |
+| `master_key` | **required** | signs every JWT, encrypts stored secrets, gates [database management](database-management.md). Boot refuses an empty/default value, a value once committed to the repo, or fewer than 32 bytes (`openssl rand -base64 48`) |
+| `public_address`, `backend_port` | **required** | bind address and port |
+| `backend_host`, `backend_version` | `public_address`, `v1` | how clients reach the API (the frontend derives `API_BASE` from them) |
+| `api_config_path` | — | optional `api.yaml` (cosmetic API overrides); set but missing/malformed = fatal |
+| `seed_demo_data` | `false` | dev-only sample data at boot (ignored outside `development`) |
 
-!!! note "Object storage is all-or-nothing"
-    The `/api/v1/pictures` routes only mount when **both** `s3_endpoint` and `s3_bucket` are set. Leaving all five `s3_*` fields empty is a valid configuration — picture/signature widgets are simply unavailable, not broken. See [Object Storage](object-storage.md).
+### Database
 
-!!! note "Security-related fields are optional with safe defaults"
-    `request_body_limit` and `auth_rate_limit_per_minute` apply sensible defaults when omitted. `allowed_origins` is the exception: leaving it empty is convenient for local dev but permits any origin — always set it in production. `main.go` logs a warning at startup when it is unset.
+| Key | Default | Meaning |
+|---|---|---|
+| `db_host`, `db_port`, `db_user`, `db_password` | **required** | PostgreSQL connection (PostGIS image; `pg_trgm` expected). Boot refuses an empty/default `db_password` or `postgres` |
+| `db_name` | `poc` in shipped configs | database; created at boot if missing. Rewritten by a [database switch](database-management.md) when the file is writable |
+| `max_connection`, `min_connection` | 10, 2 | pool size |
 
----
+!!! note "Pool timing keys are not wired"
+    `max_conn_idle_time`, `max_conn_life_time`, `health_check_period` and `connect_timeout`
+    appear in the example configs but are **not passed to the pool** today: the pool always
+    uses its defaults (30 min idle, 1 h lifetime, 1 min health check, 10 s connect timeout).
 
-## Loading Sequence
+### HTTP & sessions
+
+| Key | Default | Meaning |
+|---|---|---|
+| `allowed_origins` | empty = `*` (dev only, warned) | CORS allow-list — set it in production |
+| `access_ttl_seconds` | 3600 (shipped configs: 21600 = 6 h) | access JWT lifetime; also the BFF cookie's `maxAge` |
+| `refresh_ttl_seconds` | 604800 (7 days) | how long a session can be silently renewed |
+| `request_body_limit` | `1M` | every request body except uploads |
+| `upload_body_limit` | `20M` | `/api/v1/pictures`, `/api/v1/attachments` (exempt from the limit above) |
+| `auth_rate_limit_per_minute` | 20 | per client IP on `/api/v1/auth/*`, website signup/login, database management |
+
+A long access TTL delays role/permission changes and user disabling: they apply at the next
+refresh. A new upload route must be added to `BodyLimitExempt` and given the upload limit, or
+it stays at 1 MB. Bodies over the limit get `413`. See [HTTP Pipeline](http-pipeline.md).
+
+### Website
+
+| Key | Default | Meaning |
+|---|---|---|
+| `website_tenant_id` | the single tenant | tenant the public site serves ([Website](website.md)) |
+| `site_url` | — | public origin used in email links |
+| `public_rate_limit_per_minute` | 300 | per client IP on `/api/v1/public` and `/api/v1/website` |
+
+### Optional services
+
+Each feature mounts only when its keys are set; leaving them empty is valid, not broken.
+
+| Keys | Enables |
+|---|---|
+| `s3_endpoint`, `s3_region`, `s3_bucket`, `s3_access_key`, `s3_secret_key` | pictures, attachments, report storage ([Object Storage](object-storage.md)) |
+| `pdf_service_url` **or** `nats_url`, plus `frontend_base_url` and S3 | PDF reports ([Reports](reports.md)); NATS wins when both are set |
+| `nats_url` | also NATS version probes ([Versioning](versioning.md)) |
+| `redis_url`, `redis_ttl_seconds` (60) | the [Redis read cache](query-cache.md) |
+| `smtp_host`, `smtp_port`, `smtp_user`, `smtp_password`, `smtp_from`, `smtp_tls` | outgoing email ([Mail](mail.md)); boot refuses a password over `smtp_tls: none` to a remote host |
+| `cron_log_dir` (`cron_logs`) | where [cron](cron.md) run logs go |
+
+## Loading sequence
 
 ```mermaid
 flowchart TD
-    A["-config flag"] --> B["common.DecodeJSON[*types.Config](path)"]
-    B --> C{File exists?}
-    C -- No --> D["Fatal: config file not found"]
-    C -- Yes --> E{Valid JSON?}
-    E -- No --> F["Fatal: JSON parse error"]
-    E -- Yes --> G["Config struct populated"]
-    G --> H["Build DSN from db_* fields"]
-    G --> I["Build orm.Config from connection fields"]
-    H & I --> J["orm.Open(ormConfig, logger)"]
-    G --> K["module.LoadModules(config, db)"]
+    A["-config flag"] --> B["DecodeJSON → types.Config"]
+    B --> C["Config.ResolvePaths (anchor relative paths)"]
+    C --> D["app.Build: validate (environment, master_key…)"]
+    D --> E["ensure database exists → open pool"]
+    E --> F["module.NewRegistry: detect, order, migrate, load"]
+    F --> G["mount routes (optional features by config)"]
+    G --> H["App.Run: background jobs + serve"]
 ```
 
-`core/internal/common/readjson.go` provides the generic decoder:
+Errors in `app.Build` are returned, never `Fatal`ed, so the whole wiring is testable
+(`internal/app/app_test.go` boots it against the test database).
 
-```go
-cfg, err := common.DecodeJSON[*types.Config](configPath)
-```
+## Security notes
 
----
+- `master_key` is the most sensitive value in the system. Rotating it ends every session and
+  makes stored secrets (LDAP/OIDC) unreadable until re-entered.
+- Keep the file `0600`, owned by the process user; in Compose it is mounted read-only.
+- Never reuse dev secrets in production, and never commit a filled config.
 
-## DSN Construction
+## Adding a key
 
-The DSN passed to `pgxpool` is assembled at startup:
-
-```
-postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}
-```
-
-This is done in `cmd/app/main.go` before calling `orm.Open`. The DSN is never logged (it contains the password).
-
----
-
-## Connection Pool Mapping
-
-| Config field | `orm.Config` field | Notes |
-|---|---|---|
-| `max_connection` | `MaxConns` | |
-| `min_connection` | `MinConns` | |
-| `max_conn_idle_time` | `MaxConnIdleTime` | seconds → `time.Duration` |
-| `max_conn_life_time` | `MaxConnLifeTime` | seconds → `time.Duration` |
-| `health_check_period` | `HealthCheckPeriod` | seconds → `time.Duration` |
-| `connect_timeout` | `ConnectTimeout` | seconds → `time.Duration` |
-
----
-
-## Interactions
-
-```mermaid
-graph LR
-    File["eerp-config.json"] -->|read once at boot| Config["types.Config"]
-    Config -->|db_* fields| DSN["DSN string"]
-    Config -->|connection fields| ORMCfg["orm.Config"]
-    Config -->|module_root| ML["Module Loader"]
-    Config -->|master_key| Auth["Auth / Token signing"]
-    DSN --> ORMCfg
-    ORMCfg -->|orm.Open| DB["orm.DB"]
-```
-
----
-
-## Security Notes
-
-- The `master_key` signs authentication tokens. Rotate it to invalidate all active sessions.
-- The `db_password` is only ever in memory and in the config file. It is not logged.
-- In production, the config file should be owned by the process user with `0600` permissions.
-- Consider using a secrets manager to populate sensitive fields and write the config file to a tmpfs mount at deploy time.
-- Set `allowed_origins` to your exact frontend origin(s) in production; the `*` fallback is for local development only.
-- `api_config_path` (`api.yaml`) is loaded **fail-closed**: if the path is set but the file is missing or malformed, the app refuses to start rather than silently dropping the API-surface overrides it contains.
-- `auth_rate_limit_per_minute` caps auth attempts per IP; lower it for stricter brute-force protection, or front the service with a shared limiter for multi-instance deployments.
-
----
-
-## Extension Points
-
-The `types.Config` struct is the single place to add new configuration fields. After adding a field:
-
-1. Add it to `core/internal/types/config.go`
-2. Add the JSON tag matching the `eerp-config.json` key
-3. Read it from the `Config` struct in `main.go` and wire it to the appropriate component
+1. Add the field and its JSON tag to `core/internal/types/config.go`, with a comment saying what
+   it does and its default.
+2. Wire it in `internal/app`; if it's optional, make the feature mount only when it's set.
+3. Add it to the example configs and to this page.
