@@ -49,11 +49,13 @@ go run ./cmd/app -config="../../eerp-config.json"
 | `db_host`, `db_port`, `db_user`, `db_password` | **required** | PostgreSQL connection (PostGIS image; `pg_trgm` expected). Boot refuses an empty/default `db_password` or `postgres` |
 | `db_name` | `poc` in shipped configs | database; created at boot if missing. Rewritten by a [database switch](database-management.md) when the file is writable |
 | `max_connection`, `min_connection` | 10, 2 | pool size |
+| `max_conn_idle_time` | 1800 s (pool default when 0) | close connections idle longer than this, **in seconds** |
+| `max_conn_life_time` | 3600 s | recycle connections older than this, in seconds |
+| `health_check_period` | 60 s | how often idle connections are pinged, in seconds |
+| `connect_timeout` | 10 s | per-connection establishment timeout, in seconds |
 
-!!! note "Pool timing keys are not wired"
-    `max_conn_idle_time`, `max_conn_life_time`, `health_check_period` and `connect_timeout`
-    appear in the example configs but are **not passed to the pool** today: the pool always
-    uses its defaults (30 min idle, 1 h lifetime, 1 min health check, 10 s connect timeout).
+Pool settings apply to every pool core-back opens — the boot pool and a
+[database-management](database-management.md) standby that may take over all traffic.
 
 ### HTTP & sessions
 
