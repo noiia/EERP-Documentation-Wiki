@@ -7,8 +7,8 @@ This guide gets EERP running on your machine and points you at your first change
 | Tool | Version | Purpose |
 |---|---|---|
 | Docker + Docker Compose | v2 | the whole dev stack (database, object storage, Redis, NATS, mail catcher, backend, gateway) |
-| Go | 1.26 | backend tests and tooling |
-| Node.js + pnpm | Node 20+, pnpm via `npx -y pnpm@<version>` works | frontend dev server and tests |
+| Go | 1.27 | backend tests and tooling |
+| Node.js + pnpm | Node 22+, pnpm via `corepack enable` (pinned to `pnpm@12.18.0` in `core-front/package.json`) | frontend dev server and tests |
 | Make, `openssl` | any | task runner, secret generation |
 
 !!! note "No Rust toolchain needed"
@@ -75,9 +75,10 @@ run in the background with live progress under the bell). See [Demo Data](core/d
 
 ## 5. Make a change
 
-- Scaffold a module: `go run ./tools/eerp-init-module -p core/modules/<name> -t go` — it writes
+- Scaffold a module: `(cd tools/eerp-init-module && go run . -p ../../core/modules/<name> -t go)` — it writes
   `module.json`/`module.go` and the frontend `views/`, wires the module into `core/modules/all`,
-  and links it into the frontend workspace. Then follow
+  and links it into the frontend workspace. The tool has its own `go.mod`, hence the `cd`; its
+  usage notes sit atop its `main.go`. Then follow
   [Building a Module From Scratch](developer-guide/module-from-scratch.md).
 - Read [Architecture Overview](architecture/index.md) for how the layers fit, and [ORM](core/orm.md)
   for database access.

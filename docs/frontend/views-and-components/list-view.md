@@ -2,7 +2,7 @@
 
 The default display mode of a `viewType: 'tree'` descriptor — an MUI X `DataGrid` (with a
 `RichTreeView` fallback for genuinely hierarchical data carrying `parent_id`). This is what you get
-with zero configuration; Kanban/Calendar/Graph are opt-in modes a workspace admin switches to later.
+with zero configuration; the other display modes are opt-in, from the module's `viewModeDefaults` or a workspace admin.
 
 ---
 
@@ -28,8 +28,8 @@ declaration order, `relation` fields excepted (they render on forms only, never 
 
 - The [search/filter bar](search-filter-bar.md), mounted automatically inside the same renderer.
 - A `CreateBar` tied to the entity's form route and `createPermission`.
-- The List/Kanban/Calendar/Graph mode switcher. A mode appears only once its configuration
-  resolves (a status field, a date field, graphs enabled) — from the module's
+- The display-mode switcher (List, Kanban, Calendar, Graph, Gantt, and the diagram and risk modes).
+  A mode appears only once its configuration resolves (a status field, a date field, graphs enabled, Gantt dates) — from the module's
   `viewModeDefaults` or the workspace override in Settings → Apps → *module* → Views
   ([Settings](../../core/settings.md)).
 - **Row selection and bulk actions**: checkboxes, a *Select all* button for the loaded rows, and

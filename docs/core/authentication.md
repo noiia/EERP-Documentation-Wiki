@@ -227,6 +227,11 @@ Accounts and roles are managed through dedicated, audited endpoints — never th
 
 Permissions follow the same route-derived `module:resource:action` convention as every other handler — see [Permissions](permissions.md).
 
+- **Listing users** (`GET /api/v1/users`) honors the generic list's `search[<col>]` (case-insensitive
+  contains, ANDed; an unknown column is a 400) and `in[id]=`, so many2one/many2many user pickers search
+  and resolve labels like any entity. Payloads carry `has_avatar` (see
+  [External Sign-In → LDAP photos](external-auth.md#ldap-photos)). Pickers of users in a module (e.g.
+  Project's manager and assignees) need `users:users:read`.
 - **Creating a user** (`POST /api/v1/users`) with no password starts the account **locked**: its hash comes from discarded random bytes, so no password can match. Writable fields are the profile (email, username, name, surname, display name, job title, phone, the 7-column address) and `password`; a blank password on update leaves the credential unchanged. `password_hash` is never present in any request or response body. Email collisions among live users answer 409.
 - **Roles are assigned** through the `user_roles` junction (generic CRUD, unique `(user_id, role_id)`) — the User form's *Roles* tags field. A user may hold several roles, like directory groups.
 - **Creating a role** (`POST /api/v1/roles {name, description}`) starts with **no grants** — permissions are assigned through their own flow, not at creation time.

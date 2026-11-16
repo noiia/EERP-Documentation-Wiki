@@ -11,20 +11,44 @@ half and [ADR-011](../../adrs/011-pdf-report-generation.md) for why Chromium.
 ## Descriptor
 
 ```ts
-// core/modules/sale/reports/invoice_report.ts
+// core/modules/sale/reports/invoice_report.ts (abridged)
 export const invoiceReport: ReportDescriptor = {
   name: 'sale.invoice',
+  extends: DEFAULT_REPORT_NAME,          // 'core.default': the letterhead header + footer
   entity: 'invoice',
-  layout: {
-    kind: 'section',
-    className: 'p-8',
-    children: [
-      { kind: 'field', name: 'invoice_number', className: 'text-2xl font-bold' },
-      { kind: 'table', rows: 'lines', columns: ['description', 'quantity', 'unit_price', 'total'] },
-    ],
-  },
+  permissions: ['invoice:invoice:read'],
+  layout: [
+    { kind: 'field', name: 'subject', className: 'eerp-report-title' },
+    {
+      kind: 'table',
+      source: 'lines',
+      className: 'eerp-report-table',
+      relation: { entity: 'sale_line', inverseField: 'invoice_id' },
+      columns: [
+        { name: 'variant_name', label: 'Product' },
+        { name: 'quantity', label: 'Quantity' },
+      ],
+    },
+  ],
 }
 ```
+
+`layout` is an array of nodes: `section`, `field`, `text`, `image`, `table`, `pageBreak` and `slot`.
+Class names hook into `apps/shell/app/print/report/report.css`. A table column may carry a
+`display` condition (the same `Condition` DSL as form fields) evaluated against the record, e.g. the
+rent receipt's Tax column shown only when `display_taxes` is true.
+
+## Inheritance: the letterhead is inherited, not imposed
+
+A report may `extends` another by name and declare `chrome: { header?, footer? }`. The engine ships
+one abstract base, `defaultReport` (`core.default`: `chrome: { header: true, footer: true }`, layout
+`[{ kind: 'slot' }]`). `resolveReports` flattens a chain: the child's layout goes in the parent's
+`slot` (appended without one), chrome merges key by key, `pageFormat` is inherited unless overridden,
+and `abstract` is never inherited. The print route draws the letterhead (company logo + configured
+address, footer) **only** when the resolved chrome asks for it.
+
+Every shipped report extends `core.default`; a module can also ship its own abstract base for its
+documents. A new report that forgets `extends` prints without the letterhead.
 
 Register it on the module's `FrontModule.reports` array (see [ADR-019](../../adrs/019-per-model-view-files.md)
 for the one-file-per-report convention) — `sale`'s assembler is the reference shape.

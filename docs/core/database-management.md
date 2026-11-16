@@ -60,9 +60,16 @@ config mount it silently isn't, and the next restart returns to the configured d
 
 - The dump is `pg_dump` / `pg_restore` (installed in the `core` image, matched to the server's
   major version).
-- S3 content is **manifest-driven**: the zip holds exactly the `picture` / `attachment` objects
-  the extracted database references, even in a bucket shared by several databases. Generated
-  report PDFs are not included — they are regenerated from the data.
+- S3 content is **manifest-driven**: the zip holds exactly the objects the extracted database
+  references (`manifestSources`: `picture`, `attachment`, and Teams' `chat_attachment` and live
+  `team_file` rows; a table the database doesn't have is skipped), even in a bucket shared by
+  several databases. Generated report PDFs are not included — they are regenerated from the data.
+  A module storing objects under a table of its own must be added to `manifestSources`, or its
+  files silently miss from extractions.
+- A restore reads the dump's table of contents first and leaves out any extension the target server
+  doesn't ship, with the schemas it owns: databases created by an older PostGIS image carry
+  `postgis_tiger_geocoder` (schemas `tiger`, `tiger_data`), which PostGIS 3.7 images dropped and EERP
+  never used. A failed restore drops the database it created, so a retry can reuse the name.
 - The restore upload is exempt from `request_body_limit` and capped at 2 GB, matching nginx's
   `client_max_body_size` on that location.
 

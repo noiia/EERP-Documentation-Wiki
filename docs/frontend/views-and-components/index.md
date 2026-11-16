@@ -9,14 +9,18 @@ descriptor** — the architecture, not the usage — see [View Engine](../view-e
 
 ## View Types
 
-Every entity route picks one `ViewType`. `tree` additionally has four **display modes**, switched
-by the workspace, never by the descriptor.
+Every entity route picks one `ViewType`. `tree` additionally has up to nine **display modes**. Kanban, Calendar, Graph and Gantt can be
+enabled by the module's `viewModeDefaults` or by a workspace admin; the diagram and risk modes are
+module-declared only.
 
 | Page | `viewType` | What it renders |
 |---|---|---|
 | [List View](list-view.md) | `tree` (default mode) | An MUI X DataGrid — the default for any flat or hierarchical entity |
-| [Kanban View](kanban-view.md) | `tree` (`Kanban` mode) | Cards grouped into columns by a `selection` field |
+| [Kanban View](kanban-view.md) | `tree` (`Kanban` mode) | Cards grouped into columns by a `selection` or many2one field |
 | [Calendar View](calendar-view.md) | `tree` (`Calendar` mode) | Cards placed on a date field, drag-to-reschedule |
+| [Gantt View](gantt-view.md) | `tree` (`Gantt` mode) | Bars on a timeline from a start to an end date, dependency arrows, color groups |
+| [Diagram Views](diagram-views.md) | `tree` (`WBS`, `PERT`, `OBS` modes) | Box-and-line diagrams: work breakdown, dependency network with critical path, project organization |
+| [Risk View](risk-view.md) | `tree` (`Risk` mode) | A project's risk matrix, Ishikawa and register |
 | [Graph View](graph-view.md) | `tree` (`Graph` mode) or `dashboard` | Drag/resize dashboard tiles (charts, KPIs) |
 | [Form View](form-view.md) | `form` | A single-record editor with a synthesized or explicit layout |
 | [Catalog View](catalog-view.md) | `catalog` | Icon/title/subtitle rows — an app-picker-style list |
@@ -27,7 +31,7 @@ by the workspace, never by the descriptor.
 
 | Page | What it is |
 |---|---|
-| [Relation Widgets](relation-widgets.md) | Search, tags, list, carousel, and summary — the five ways a related record shows up |
+| [Relation Widgets](relation-widgets.md) | Search, tags, color tags, list, carousel, and summary: the ways a related record shows up |
 | [Address Widget](address-widget.md) | A composite 7-column address field with optional map autocomplete |
 | [Totals Widget](totals-widget.md) | A live, computed recap over a set of relation lines (e.g. tax breakdown) |
 | [Picture, Signature & File Widgets](picture-signature-file-widgets.md) | Object-storage-backed binary field widgets |

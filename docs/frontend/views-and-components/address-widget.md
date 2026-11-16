@@ -22,7 +22,11 @@ The engine derives the seven sibling field names from `billing_address` automati
 When the workspace has configured an OpenStreetMap/Nominatim connector (Settings → Global settings
 → Integrations), the widget offers live address autocomplete, proxied through a Next.js BFF route
 (`apps/shell/app/api/integrations/osm/search/route.ts`) — the browser never calls Nominatim
-directly, and the connector's base URL/user-agent/API key never reach client JavaScript. See
+directly, and the connector's base URL/user-agent/API key never reach client JavaScript. "Number and
+street" is one combined input ("12 Main Street") parsed on blur into the number and street columns;
+suggestions are shortened to number + extension + street, city, state, country and zip code, and a
+house-number extension (`bis`, `ter`, `B`…) is stored at the head of the street, since the number
+column is an integer. See
 [Settings → OpenStreetMap connector](../../core/settings.md#openstreetmap-connector).
 
 Without a configured connector, the widget still works as seven plain text/selection inputs — the

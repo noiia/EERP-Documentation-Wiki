@@ -42,7 +42,7 @@ This keeps gating at the granularity `ActiveGateMiddleware` can actually enforce
 
 ### 3. One WASM `Store` per module, not one shared `Store`
 
-The pre-ADR-010 code created a single Wasmtime `Store` and instantiated every WASM module into it. That was fine when nothing was ever unloaded, but `Registry.Reload` needs to replace a module's instance without disturbing every other module sharing the same `Store` — and wasmtime-go exposes no per-instance free, only whole-`Store` teardown. So each module now gets its own `Store` (all still sharing the one `Engine`, which is designed to be shared); `Reload` builds a fresh `Store`, re-instantiates into it, and drops the old reference for GC.
+The pre-ADR-010 code created a single Wasmtime `Store` and instantiated every WASM module into it. That was fine when nothing was ever unloaded, but `Registry.Reload` needs to replace a module's instance without disturbing every other module sharing the same `Store` — and wasmtime-go (v15 then; still true of v49) exposes no per-instance free, only whole-`Store` teardown. So each module now gets its own `Store` (all still sharing the one `Engine`, which is designed to be shared); `Reload` builds a fresh `Store`, re-instantiates into it, and drops the old reference for GC.
 
 ### 4. `Reload` is real for WASM, a re-validation no-op for Go
 

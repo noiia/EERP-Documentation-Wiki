@@ -29,15 +29,44 @@ const listView: ViewDescriptor = {
   viewType: 'tree',
   fields,
   search: {
-    liveFields: ['name', 'id', 'email'],  // live-search priority order
-    filterableFields: ['status', 'company', 'created_at'],
-    groupableFields: ['status', 'company'],
+    liveFields: [{ field: 'name' }, { field: 'email', priority: 2 }], // live-search order (lower first)
+    filterableFields: ['status', 'company', 'created_at'],  // omitted ⇒ every field
+    groupableFields: ['status', 'company'],                 // omitted ⇒ selection/relation/boolean fields
   },
 }
 ```
 
-All three lists are plain data, validated at module registration — an entity that declares nothing
-still gets a working bar with sensible defaults derived from its fields.
+All lists are plain data, validated at module registration; an entity that declares nothing still
+gets a working bar with defaults derived from its fields (live search: name, then id, then other
+text/relation fields).
+
+### Relation filters are picked, not typed
+
+A relation field's filter value is chosen from the related records (`RelationFilterInput`: the first
+20 on open, then `search[<labelField>]=` as you type; several for `in`). A many2one value, in a filter
+chip or a group-by value, shows its record's **label**, never the id (`useRelationLabels`: one
+`in[id]=` read per batch of ids).
+
+### Filter-only fields
+
+`search.filterOnlyFields: FieldDescriptor[]` adds fields offered as filters only, never as list
+columns, typically a many2many such as a task's *Assignees* or *Color groups*. Its filter is `eq` only
+and goes out as `filter[<name>]=<id>`, which **the entity's own list handler must resolve** (the
+generic list knows only columns; Project's `TaskFilters` does it for tasks). A name repeating one of
+`fields` is refused at registration.
+
+```ts
+// core/modules/project/views/project_views.ts
+search: { filterOnlyFields: [assigneesField, colorGroupsField] },
+```
+
+### Filters from the URL
+
+A list URL's `filter[<field>]=<value>` (filterable fields only) seeds the bar with that exact-match
+filter, so a form or a menu can link to a pre-filtered list (`/project/tasks?filter[project_id]=<id>`).
+The chip stays removable. A route's `navQuery` (e.g. Project's `?filter[active]=true`) uses this to
+give a menu link a default filter the user can drop, unlike a fixed `listFilter`. The new-record form
+opened from such a list starts its many2one fields from these values.
 
 ## Field-level group gating applies here too
 

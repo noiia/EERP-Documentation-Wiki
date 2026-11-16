@@ -27,8 +27,31 @@ make run-front-tests                                  # frontend lint + typechec
 ```
 
 `make test` runs, in order: the Go backend tests with Redis (`REDIS_URL` set, so the cache tests
-run too), the **dead code gate**, `pdf-service`'s tests, then the frontend's lint, typecheck and
-tests — the same checks as CI.
+run too) and their coverage floor, the **dead code gate**, `pdf-service`'s tests and its floor, then
+the frontend's lint, typecheck and tests with each package's coverage thresholds: exactly what CI
+runs, coverage gates included.
+
+### Before pushing: coverage floors
+
+Nothing is pushed until `make test` passes **and** every service still meets the coverage floor CI
+enforces (`.github/workflows/test-check.yml` gates every image build on them):
+
+| Service | Floor (source of truth) |
+|---|---|
+| core (Go) | `threshold.total` in `.github/.testcoverage.yml` (85%), via `go-test-coverage` |
+| pdf-service (Go) | `.github/.testcoverage-pdf-service.yml` (no floor set yet) |
+| frontend shell | `coverage.thresholds` in `core-front/apps/shell/vitest.config.ts` (80% on every metric) |
+| frontend engine | `coverage.thresholds` in `core-front/packages/core-front/vitest.config.ts` (80% on every metric) |
+
+A figure under its floor is fixed by adding tests: never lower a threshold, skip a test or exclude a
+file. New code ships with the tests that keep its service above the floor.
+
+The README's coverage badges are **written by CI**: after a green run on `main`, the `coverage-badges`
+job rewrites the block between `<!-- coverage-badges:start -->` and `<!-- coverage-badges:end -->`.
+
+!!! warning "Local vs CI coverage"
+    The Go figure is measured against your dev database, while CI uses a fresh one, and it varies
+    with the Go version. A local run just above the floor can still fail in CI.
 
 !!! warning "The dead code gate"
     CI fails on any Go function unreachable from `main` that isn't listed in
@@ -145,6 +168,8 @@ func TestItemCreate(t *testing.T) {
 2. On a fresh database, create the tables first: `testdb.MigrateModules(t, app, "auth", …)` for
    modules' real schemas (blank-import each module's package so it registers), or
    `testdb.Migrate(t, app, tables...)` for individually registered tables.
+   A test migrating a module lists its **dependencies first**: `MigrateModules` runs them in the
+   order given (settings needs company, warehouse needs auth's `users` table).
 3. Tests may run against the **live dev database**. Seed under a fresh `uuid.New()` tenant…
 4. …and clean up **only the rows you created**.
 
@@ -274,9 +299,24 @@ func TestConditionRebasing(t *testing.T) {
 | `testdb.Open(t)` | The test database (`TEST_DSN`, else `CONFIG`, else skip), closed at test end |
 | `testdb.MigrateModules(t, app, names...)` / `testdb.Migrate(t, app, tables...)` | Create the schema a test needs on a fresh database |
 | `testdb.Config(t)` | The resolved app config, with `TEST_DSN`'s coordinates when set |
+| `testdb.Closed(t)` | An `orm.App` whose pool is already closed: every query fails, so a handler's database-error paths can be tested (a 500, never a silent 2xx) |
 | `t.Helper()` | Mark assertion helpers; errors point to call site |
 | `require.NoError(t, err)` | Stop test immediately on error |
 | `assert.Equal(t, want, got)` | Soft assertion (test continues) |
+
+---
+
+## Frontend Tests
+
+Frontend tests run on Vitest with jsdom and MSW (`make run-front-tests`, or `pnpm test` in `core-front/`).
+
+- DOM assertions come from `@testing-library/jest-dom/vitest` (the setup files import that entry);
+  since v7 the bare `@testing-library/jest-dom` entry no longer augments Vitest's `expect` type.
+- jsdom resolves `rem`/`vw`/`vh` in `getComputedStyle`: assert computed `px` values.
+- MSW 3's unhandled-request option is `onUnhandledFrame`.
+- A test rendering a [lazy widget](../frontend/index.md#navigation-performance) must load it first:
+  the engine's setup calls `preloadLazyComponents()`; a shell test does it in its own `beforeAll`.
+- A shell test rendering a link gets a stub router from `src/test/setup.ts`.
 
 ---
 

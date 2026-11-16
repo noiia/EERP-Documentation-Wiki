@@ -9,7 +9,7 @@
 This guide walks you through building a Go module from scratch. We'll build a `hr` (Human Resources) module as a running example, mirroring the pattern used by the `contact` module (`core/modules/contact/`) and the CRM module (`core/modules/crm/internal/crm.go`).
 
 !!! tip "Faster start: scaffold it"
-    `go run ./tools/eerp-init-module -p core/modules/hr -t go` generates the `module.json`,
+    `(cd tools/eerp-init-module && go run . -p ../../core/modules/hr -t go)` generates the `module.json`,
     `module.go`, a starter entity, frontend view files, and wires the blank import into
     `core/modules/all/all.go` automatically. See [Building a Module From
     Scratch](module-from-scratch.md) for the full walkthrough using the tool. This guide explains
@@ -21,7 +21,7 @@ This guide walks you through building a Go module from scratch. We'll build a `h
 
 You need:
 
-- Go 1.26+ with generics support
+- Go 1.27+ with generics support
 - A running PostgreSQL instance (see `compose.yml`)
 - The EERP core repository checked out
 

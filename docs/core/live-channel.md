@@ -54,8 +54,11 @@ Both are open to every signed-in staff user: presence is app chrome, not gated d
 absent → offline transition, since no request happens at the 30-minute mark.
 
 Frontend: `AvatarWithPresence` draws the coloured bubble wherever an avatar appears (the top
-bar's account menu, chatter authors, the Users list); the account menu offers Online / Busy /
-Do not disturb.
+bar's account menu, chatter authors, the Users list, Teams members); the account menu offers
+Online / Busy / Do not disturb. The avatar shows the user's photo when one exists (synced from LDAP,
+see [External Sign-In](external-auth.md#ldap-photos)): user payloads carry `has_avatar`, and only
+then does `avatarUrl()` point at the BFF route `/api/avatars/<user>`, which relays
+`GET /api/v1/avatars/:user`; otherwise the initial stays.
 
 ## Frames on the channel
 
@@ -65,11 +68,14 @@ Do not disturb.
 | `update` | one user's new status | every tab of the tenant (`Hub.Broadcast`) |
 | `notification` | one notification | exactly the users allowed to see it (`Hub.SendToUsers`) |
 | `notification_read` | ids (or `all`) the user marked read | that user's other tabs |
+| `chat_message` | a new [Teams](teams.md) message, built per viewer (hidden files redacted) | the channel's audience (`Hub.SendToUsers`) |
+| `chat_reaction` | a reaction toggled on a message | the channel's audience |
+| `chat_message_deleted` | the id of a deleted message | the channel's audience |
 
 Older clients ignore types they don't know, so new frame types are additive.
 
-!!! warning "Never broadcast a notification"
-    `Hub.Broadcast` fans out to the whole tenant. Notifications go through
+!!! warning "Never broadcast a notification or a chat frame"
+    `Hub.Broadcast` fans out to the whole tenant. Notifications and Teams chat frames go through
     `Hub.SendToUsers` with an audience computed server-side — see
     [Notifications](notifications.md).
 

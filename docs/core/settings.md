@@ -47,10 +47,12 @@ live in the tenant-wide slot (`company_id = uuid.Nil`) — marked *tenant* below
 |---|---|---|---|
 | `i18n.default_locale` | `PUT /settings/i18n` | company | workspace default language |
 | `format.number` | `PUT /settings/format` | company | decimal / thousands separators |
+| `format.date` | `PUT /settings/format/date` | company | the short date pattern, a closed set (`dd/MM/yyyy`, `MM-dd-yyyy`, `yyyy-MM-dd`…); returned as `date_format` by `GET /me/preferences` and the site's `/public/localization` |
 | `units.system` | `GET\|PUT /settings/units` | company | `{system: "metric" \| "imperial"}`, absent = metric (`ResolveUnitSystem`) |
 | `tax.price_mode` | `GET\|PUT /settings/tax` | company | `{price_mode: "tax_excluded" \| "tax_included"}` (`ResolveTaxIncluded`) |
 | `accounts.username_at_format` | `GET\|PUT /settings/accounts` | company | `{username_at_format: bool}` — display usernames as `@handle` |
-| `views.<entity>.fields` | `GET\|PUT /settings/views/:entity/fields` | company | Kanban status field, Calendar date field, `enable_graphs` ([ADR-007](../adrs/007-runtime-view-fields.md)) |
+| `views.<entity>.fields` | `GET\|PUT /settings/views/:entity/fields` | company | Kanban status field, Calendar date field, Gantt start/end fields (`gantt_start_field`/`gantt_end_field`), `enable_graphs` ([ADR-007](../adrs/007-runtime-view-fields.md)) |
+| `views.<entity>.status_bar` | `GET\|PUT /settings/views/:entity/status_bar` | company | `{field, steps}` overriding a form's status breadcrumb, null = not overridden ([Form Chrome](../frontend/views-and-components/form-chrome.md#status-bar)) |
 | `views.<entity>.graph` | `GET\|PUT /settings/views/:entity/graph` | company | Graph-mode tile layout (shape validated, `config` opaque) |
 | `views.<entity>.chatter` | `GET\|PUT /settings/views/:entity/chatter` | company | `{enabled: bool \| null}` — override the form chatter panel; null = the descriptor's `showChatter` |
 | `widgets.picture_size`, `apps.<module>.widgets.picture_size` | `GET\|PUT /settings/apps/:module/picture-size` (`base` = workspace default) | company | `{width, height}` 16–2000 px; a module's value overrides the base one |
@@ -61,6 +63,10 @@ live in the tenant-wide slot (`company_id = uuid.Nil`) — marked *tenant* below
 | `events.settings` | `GET\|PUT /settings/events` | tenant | `{reminder_hours, waitlist_claim_hours}` ([Events](events.md)) |
 | `website.routing` | `GET\|PUT /settings/website/routing` | tenant | path or host mode ([Website](website.md#routing-path-or-host-mode)) |
 | `website.public.<table>` | `GET /settings/website/public`, `PUT …/:table` | tenant | published fields + forced filter ([Website](website.md#public-read-scope)) |
+| `website.localization` | `GET\|PUT /settings/website/localization` | tenant | site default language and currency, offered currencies, rate overrides ([Website](website.md#language-and-currency)) |
+| `website.workflow_layout` | `GET\|PUT /settings/website/workflow_layout` | tenant | box positions of the Website workflow map, shared by staff |
+| `warehouse.settings` | `GET\|PUT /settings/warehouse` | tenant | `{auto_reference}` product numbering ([Business Apps](business-apps.md#warehouse)) |
+| `propertymanagement.settings` | `GET\|PUT /settings/propertymanagement` | tenant | `{display_taxes}` prints the rent receipt's Tax column |
 | `website.legal`, `website.security`, `website.robots` | `GET\|PUT /settings/website/{legal,security,robots}` | tenant | site files ([Website](website.md#site-files)) |
 | mail templates (own table `mail_template`) | `GET /settings/mail_templates`, `PUT\|DELETE …/:key/:locale` | tenant | email overrides ([Mail](mail.md)) |
 | `dev.seed.full.<group>` | written by `POST /dev_seed` | tenant | full-seed markers ([Demo Data](demo-data.md)) |
@@ -78,6 +84,20 @@ starts in, not an error condition.
 !!! warning "Tenant-wide keys in a multi-tenant database"
     Tenant-wide keys are written under the admin's tenant. The website reads the **site tenant**
     — publish and configure the site while signed in to it.
+
+## Per-user diagram layouts
+
+Not an `app_settings` key: `GET|PUT /api/v1/me/view_layout/:entity/:mode` (`mode` = `wbs` | `pert`,
+JWT only, the caller's own row) stores a user's [diagram](../frontend/views-and-components/diagram-views.md)
+layout in `user_view_layout` (off the generic surface, unique `(tenant_id, user_id, entity, mode)`):
+
+```json
+{ "positions": { "<id>": { "x": 120, "y": 40 } }, "folded": ["<id>"],
+  "notes": [{ "id": "n1", "text": "Waiting on the supplier", "links": ["<task id>"] }] }
+```
+
+A PUT replaces the layout whole: ≤ 5000 ids, finite coordinates within ±10⁶, ≤ 200 notes of ≤ 2000
+characters and ≤ 50 links each, else 400. Nothing saved reads as the empty layout.
 
 ## Tax pricing mode
 
@@ -131,4 +151,4 @@ graph LR
 - [ADR-007: Runtime-Configurable View Fields](../adrs/007-runtime-view-fields.md)
 - [ADR-013: Multi-Company](../adrs/013-multi-company.md)
 - [Authentication → Multi-Company](authentication.md#multi-company-within-a-tenant)
-- [View Engine → Runtime view settings](../frontend/view-engine.md#runtime-view-settings-kanbancalendargraph)
+- [View Engine → Runtime view settings](../frontend/view-engine.md#display-modes-and-runtime-view-settings)

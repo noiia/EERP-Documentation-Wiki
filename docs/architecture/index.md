@@ -194,7 +194,21 @@ the full service topology this sits in front of.
 | `internal/types/` | Shared data contracts (Config, Module, Migration, Operation) |
 | `internal/common/` | Logger (zap), JSON utilities, dependency graph |
 
-The core is deliberately minimal. It provides infrastructure; it contains no business logic.
+The core provides infrastructure and shared services (auth, settings, pictures, attachments,
+reports, notifications, presence, mail, website, Teams chat); business domains live in modules.
+
+### Shipped modules
+
+| Module | App | Page |
+|---|---|---|
+| `contact`, `warehouse`, `sale`, `crm`, `propertymanagement` | contacts, catalog, quotes & invoices, CRM, property management | [Business Apps](../core/business-apps.md) |
+| `project` | projects, tasks, timesheets, WBS/PERT/OBS, risks | [Project App](../core/project.md) |
+| `teams` | staff chat and shared files | [Teams](../core/teams.md) |
+| `website`, `event`, `payment_stripe` | public site, events & booking, online payment | [Website](../core/website.md) · [Events](../core/events.md) · [Payments](../core/payments.md) |
+| `auth`, `company`, `settings`, `appstore`, `cron`, `chatter`, `notebook`, `attachments`, `pictures`, `presence`, `notify`, `mail`, `savedfilter`, `graphfield`, `reportlayout` | core-backed modules (tables and App Store entries for core services) | [Core Components](../core/orm.md) |
+| `crminheritdemo` | worked example of view and table inheritance | [View inheritance](../frontend/view-engine.md#view-inheritance-extends) |
+
+All are `"type": "go"`, blank-imported in `core/modules/all/all.go` (`propertymanagement` is imported directly by `internal/app`).
 
 ### WASM Modules (Schema Protocol) — optional path
 

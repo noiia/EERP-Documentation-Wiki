@@ -100,6 +100,7 @@ A genuinely tenant-less table (the global permission catalog, refresh tokens sco
 | `db:"col,softdelete"` | Marks the soft-delete timestamp column |
 | `db:"col,index"` | Secondary index on the column (btree) |
 | `db:"col,index=hash"` | Secondary index with an explicit access method |
+| `db:"col,generated"` | A Postgres generated column: selected, filtered and sorted, never written (see [Generated columns](#generated-columns)) |
 | `db:"-"` | Exclude from all queries |
 
 If no `db` tag is present, the column name is the snake_case conversion of the field name.
@@ -367,6 +368,55 @@ anonymously on `/api/v1/public/{table}` (`orm.AllPublicFields` = every API colum
 PK, `tenant_id`, `deleted_at` and gated ones). Nothing is public until an admin publishes a
 subset. Enforced by the same `checkColumn` / `BuildResponse` choke points as group gating —
 see [Website & Public Access](website.md).
+
+### Row scope
+
+Tenant isolation is automatic; a per-caller restriction on top of it ("a project is visible to its
+members") is a **row scope**: a function returning, per request, the condition limiting the caller's
+rows ([ADR-039](../adrs/039-row-level-access.md)).
+
+```go
+orm.Register[Project](orm.WithRowScope(func(ctx context.Context) (orm.Condition, bool, error) {
+    user, ok := callerFromContext(ctx) // the module's own identity lookup
+    if !ok {
+        return orm.Condition{}, false, errors.New("no caller") // fail closed → 500
+    }
+    if user.IsAdmin {
+        return orm.Condition{}, false, nil // ok=false: no restriction
+    }
+    return orm.Cond("EXISTS (SELECT 1 FROM project_member m WHERE m.project_id = project.id AND m.user_id = $1)", user.ID), true, nil
+}))
+```
+
+The condition is applied next to the tenant condition on **every generic read and write**: list and
+its total, `?distinct=`, `?aggregate=`, get, update, restore and delete. A row outside the scope is a
+`404`. Row-scoped tables are never served from the [Redis read cache](query-cache.md), and geo
+references to them are refused. Services anchored on another table's record (chatter, notebook,
+attachments, pictures) check it with `orm.CanSeeRecord(ctx, db, table, id)`, which is true for a
+table without a scope, and answer 404 on a hidden record.
+
+!!! warning "Pitfalls"
+    - Bind values as `$n` parameters, never by string concatenation.
+    - Typed `Repository[T]` reads and raw SQL are **not** scoped; only the generic surface applies
+      the scope. Use the generic handlers or `orm.CanSeeRecord` when a caller's visibility matters.
+
+The [Project app](project.md) is the first user.
+
+### Generated columns
+
+A value derived from other columns (seats left = capacity − seats taken) is best computed by Postgres:
+it can be filtered and sorted like any column and can never drift from its inputs. Tag the field
+`db:"remaining_seats,generated"`: the ORM still selects, scans, filters and sorts it, but leaves it out
+of typed and generic INSERT, UPDATE and Upsert, the generic `ensureColumns` pass does not add it, and
+its API field is read-only. The owning module adds the column with its expression in `Migrate()`:
+
+```sql
+ALTER TABLE event_session ADD COLUMN IF NOT EXISTS remaining_seats integer
+  GENERATED ALWAYS AS (capacity - seats_taken) STORED
+```
+
+After `Create`/`Update` the struct's value comes from `RETURNING`, never from what the caller put in it.
+A table that doesn't exist yet is created without the column until `Migrate()` runs, so add it there.
 
 ---
 

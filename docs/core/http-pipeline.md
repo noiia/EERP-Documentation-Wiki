@@ -4,7 +4,7 @@
 
 The HTTP pipeline is the boundary between the outside world and the core runtime. It translates HTTP requests into typed Go function calls, applies cross-cutting concerns (auth, logging, recovery), and translates return values back into HTTP responses.
 
-EERP uses **Echo v4** as the HTTP framework. Middleware is composed at startup and applied to route groups rather than individual handlers.
+EERP uses **Echo v5** (handlers take a `*echo.Context`) as the HTTP framework. Middleware is composed at startup and applied to route groups rather than individual handlers.
 
 ---
 
@@ -70,13 +70,14 @@ gateway's `/health` use it.
 ### Request body limits
 
 `request_body_limit` (default `1M`) caps every body. The upload routes (`/api/v1/pictures`,
-`/api/v1/attachments`) are exempt (`ormserver.Config.BodyLimitExempt`) and capped by
+`/api/v1/attachments`, Teams' `/api/v1/teams/channels` and `/api/v1/teams/*/files`) are exempt (`ormserver.Config.BodyLimitExempt`) and capped by
 `upload_body_limit` (default `20M`) instead; the database restore upload has a fixed 2 GB cap.
 Over the limit → `413`. The gateway allows 50 MB; the frontend proxy skips the upload BFF
 routes because Next buffers proxied bodies only up to 10 MB.
 
 !!! warning "Adding an upload route"
-    Add it to `BodyLimitExempt` and give it the upload limit, or it stays at 1 MB.
+    Add it to `BodyLimitExempt` and give it the upload limit, or it stays at 1 MB. Entries are path
+    prefixes; a `*` segment matches any one segment (`/api/v1/teams/*/files`).
 
 ---
 

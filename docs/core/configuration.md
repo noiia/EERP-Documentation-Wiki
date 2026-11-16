@@ -65,7 +65,7 @@ Pool settings apply to every pool core-back opens — the boot pool and a
 | `access_ttl_seconds` | 3600 (shipped configs: 21600 = 6 h) | access JWT lifetime; also the BFF cookie's `maxAge` |
 | `refresh_ttl_seconds` | 604800 (7 days) | how long a session can be silently renewed |
 | `request_body_limit` | `1M` | every request body except uploads |
-| `upload_body_limit` | `20M` | `/api/v1/pictures`, `/api/v1/attachments` (exempt from the limit above) |
+| `upload_body_limit` | `20M` | `/api/v1/pictures`, `/api/v1/attachments`, Teams' `/api/v1/teams/channels` and `/api/v1/teams/*/files` (exempt from the limit above) |
 | `auth_rate_limit_per_minute` | 20 | per client IP on `/api/v1/auth/*`, website signup/login, database management |
 
 A long access TTL delays role/permission changes and user disabling: they apply at the next

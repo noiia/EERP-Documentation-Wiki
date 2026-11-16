@@ -40,11 +40,13 @@ flowchart LR
 | `core-front` | `ghcr.io/<owner>/eerp-core-front` | Next.js pages and the BFF (holds the session cookie) |
 | `core-back` | `ghcr.io/<owner>/eerp-core` | the Go core, every module compiled in |
 | `pdf-service` | `ghcr.io/<owner>/eerp-pdf-service` | renders reports to PDF (NATS worker pool) |
-| `db` | `postgis/postgis:18-3.6` | PostgreSQL 18 with PostGIS; `pg_trgm` installed by the bootstraps |
+| `db` | `postgis/postgis:18-3.7` | PostgreSQL 18 with PostGIS; `pg_trgm` installed by the bootstraps |
 | `garage` | `dxflrs/garage` | S3-compatible storage for pictures and attachments |
 | `redis` | `redis` | optional read cache ([ADR-023](../adrs/023-optional-redis-query-cache.md)) |
 | `nats` | `nats` | message bus for PDF rendering and version probes |
 | `mailpit` | `axllent/mailpit` | **dev only**: catches every outgoing email |
+| `gateway-certs` | `alpine/openssl` | one-shot: writes the self-signed gateway certificate (the image ships the CLI, so no network is needed) |
+| `certbot` | `certbot/certbot` | **prod, profile `certbot`**: obtains and renews the Let's Encrypt certificate; never started by `up` |
 
 In production, nothing but the gateway is published to the host — the databases, Garage,
 Redis and NATS are reachable only inside the Compose network (`compose.prod.yml`).

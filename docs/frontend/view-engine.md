@@ -86,9 +86,13 @@ interface ViewDescriptor<T> {
   search?: SearchDescriptor   // list search/filter bar config — see ADR-015
   actions?: MenuNode[]        // form options-menu tree — see ADR-012
   headerButtons?: HeaderButtonDescriptor[] // always-visible workflow buttons — see ADR-012
-  statusBar?: string          // a selection field rendered as a status breadcrumb — see ADR-012
+  statusBar?: { field: string; editable?: boolean } // status breadcrumb — see Form Chrome
+  formContext?: string        // a settings endpoint whose keys conditions read as `context.<key>`
+  viewModeDefaults?: ViewModeDefaults // module baselines for the tree display modes (below)
+  dashboardLinks?: { title: string; description?: string; icon?: string; path: string }[] // dashboards only
   showChatter?: boolean       // per-record activity feed panel — see the Chatter Panel page
   navLabel?: string           // label in the per-app top-bar header menu
+  navQuery?: string           // a `?…` query appended to the menu link (a removable default filter)
   hideFromTopBar?: boolean    // opt a route out of the auto-populated top-bar menu
   listFilter?: Record<string, unknown> // a fixed filter baked into a route (e.g. a status-scoped sub-list)
   catalog?: CatalogDescriptor  // icon/title/subtitle rows — 'catalog' viewType only
@@ -132,17 +136,48 @@ Operations are data an interpreter walks (the same reasoning that keeps `compute
 
 ---
 
-## Runtime view settings (Kanban/Calendar/Graph)
+## Display modes and runtime view settings
 
-Every `tree` view's display mode (`List | Kanban | Calendar | Graph`) is a workspace admin preference, not descriptor data — deliberately, so it can differ per workspace without a rebuild. Kanban's status column and Calendar's date field are stored in tenant-and-company-scoped `app_settings` (`views.<entity>.fields`, via `GET|PUT /api/v1/settings/views/:entity/fields`), never on the descriptor. Graph mode's tile layout is a sibling key, `views.<entity>.graph` (`GET|PUT /api/v1/settings/views/:entity/graph`) — see [Settings & Workspace Configuration](../core/settings.md) for both. The Settings → Views UI still *sources its choices* from the registered descriptor (only `type: 'selection'` fields are offered for Kanban, only `type: 'date'` fields for Calendar) — the descriptor owns what fields exist, `app_settings` owns which one a workspace picked. An entity with no configured field is a normal state (200 with nulls, not a 404); the mode switcher just disables that button until configured. See [ADR-007: Runtime-Configurable View Fields](../adrs/007-runtime-view-fields.md).
+`TreeRenderer` renders a `List | Kanban | Calendar | Graph | Gantt | WBS | PERT | OBS | Risk` mode
+switcher above every `tree` view; the choice persists per entity in the browser. A mode is
+**omitted** from the switcher (not shown disabled) until its configuration resolves, and a persisted
+mode that has since been turned off falls back to List.
 
-A module can additionally declare `ViewModeDefaults.calendarColorField?: string` — a fixed,
-module-stated hint (not a workspace preference) naming a boolean field whose `true` value tints a
-Calendar card, e.g. [Cron](../core/cron.md) coloring a failed run's card red. See
-[ADR-017](../adrs/017-cron-scheduler.md).
+The configuration comes from two sources:
 
-See [Views & Components](views-and-components/index.md) for a per-view-type walkthrough (List,
-Kanban, Calendar, Graph, Form, Catalog, Dashboard, Report) with real, shipped-module examples.
+- **Module baseline**: `ViewDescriptor.viewModeDefaults`. Some keys are only ever module-declared.
+- **Workspace override**: the admin's choice in `app_settings` `views.<entity>.fields`
+  (`GET|PUT /api/v1/settings/views/:entity/fields`), which always wins when non-null. A `null`
+  means "not overridden", not "off". Settings → Views shows each value pre-filled from its effective
+  value, warns before diverging from a module default, and offers a *revert to module settings*
+  button.
+
+| Key | Mode | Overridable |
+|---|---|---|
+| `kanbanStatusField` | Kanban (selection or many2one field) | yes |
+| `kanbanColumns`, `kanbanBadgeField` | Kanban columns from a many2one's records | no |
+| `calendarDateField` | Calendar | yes |
+| `calendarColorField` | Calendar red accent from a boolean | no |
+| `enableGraphs` | Graph | yes |
+| `ganttStartField`, `ganttEndField` | Gantt | yes |
+| `ganttDependencies`, `colorTagsField` | Gantt arrows, color groups (also Kanban/Calendar ribbons) | no |
+| `wbsParentField`, `wbsGroupField`, `wbsOrderField` | WBS | no |
+| `pertDependencies`, `pertHoursField` | PERT | no |
+| `obs` | OBS (list pinned to one project) | no |
+| `risk` | Risk (list pinned to one project) | no |
+
+Graph mode's tile layout is a sibling key, `views.<entity>.graph`. The Settings → Views UI sources
+its choices from the registered descriptor (selection fields for Kanban, date fields for Calendar and
+Gantt): the descriptor owns which fields exist, `app_settings` which one a workspace picked. See
+[ADR-007](../adrs/007-runtime-view-fields.md) and [Settings](../core/settings.md).
+
+Every mode shares the same data rules: counts and pages reflect every matching row, never a loaded
+page (`RelationOps.listPage` → `{records, total}`), every total renders through `formatTotal`, and the
+search bar's structured filters reach every mode. Field moves (Kanban, Calendar, Gantt) go through
+`useOptimisticFieldMove`; clicks on an empty spot quick-create a record (`quick-create.tsx`).
+
+See [Views & Components](views-and-components/index.md) for a per-mode walkthrough with shipped
+examples.
 
 ---
 
@@ -152,12 +187,12 @@ Kanban, Calendar, Graph, Form, Catalog, Dashboard, Report) with real, shipped-mo
 
 | Type | Widgets (first = default) |
 |---|---|
-| `text` | `simple`, `long`, `phone`, `table`, `color`, `url`, `html` (Tiptap rich text — the storing service must sanitize) |
-| `number` | `float`, `int`, `percent`, `stars`, `phone`, `monetary` |
-| `boolean` | `switch`, `picture`, `signature`, `file` |
+| `text` | `simple`, `long`, `phone`, `table`, `color` (a list column shows a swatch beside the hex), `url`, `html` (Tiptap rich text — the storing service must sanitize), `mindmap` (read-only mind-map over sibling fields — see [Risk View](views-and-components/risk-view.md#mind-map-widget-textmindmap)) |
+| `number` | `float`, `int`, `percent`, `stars`, `duration` (integer minutes edited as hours : minutes), `phone`, `monetary` |
+| `boolean` | `switch`, `picture`, `signature`, `file`, `stars` (one star toggling the flag, e.g. a task's priority) |
 | `date` | `simple` (`YYYY-MM-DD`), `datetime` (a timestamptz instant edited in the browser's zone, stored as UTC) |
-| `selection` | `select`, `linked` (patches sibling fields per `widgetOptions.presets` — e.g. PDF page-format presets) |
-| `relation` | `search`, `tags`, `list` (one [default per relation kind](#relation-widgets)), plus `carousel` and `summary` overrides |
+| `selection` | `select`, `linked` (patches sibling fields per `widgetOptions.presets` — e.g. PDF page-format presets), `radio` (one radio per option in a row, for short lists such as a contact's Company/Contact kind) |
+| `relation` | `search`, `tags`, `list` (one [default per relation kind](#relation-widgets)), plus `carousel`, `summary` and `colortags` opt-ins |
 | `geo` | `point`, `shape` — Leaflet maps over PostGIS columns ([Geographic Widgets](views-and-components/geo-widgets.md)) |
 | `distance` | `meters` — the distance between two records' points, in km or miles |
 | `totals` | `recap` — a live, computed recap of sibling relation lines (e.g. a sale quote's tax-rate breakdown); always `store: false` |

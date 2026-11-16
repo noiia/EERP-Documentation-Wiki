@@ -54,6 +54,14 @@ ADRs are **immutable** once accepted. If a decision is reversed or superseded, a
 | [ADR-031](031-external-authentication.md) | External authentication: LDAP and OIDC | Accepted | 2026-10-11 |
 | [ADR-032](032-notifications.md) | Notifications and live activity | Accepted | 2026-10-13 |
 | [ADR-033](033-list-read-performance.md) | List read performance: bounded totals, automatic trigram indexes | Accepted | 2026-10-13 |
+| [ADR-034](034-website-forms.md) | Website forms write into registered tables | Accepted | 2026-11-02 |
+| [ADR-035](035-website-language-and-currency.md) | Website language and display currency | Accepted | 2026-11-03 |
+| [ADR-036](036-website-theme.md) | The website has its own theme | Accepted | 2026-11-04 |
+| [ADR-037](037-website-field-display.md) | Website field display: smart defaults, labels and icons | Accepted | 2026-11-04 |
+| [ADR-038](038-teams.md) | Teams: staff chat and shared files | Accepted | 2026-11-09 |
+| [ADR-039](039-row-level-access.md) | Row-level access on the generic CRUD surface | Accepted | 2026-11-09 |
+| [ADR-040](040-diagram-views.md) | WBS and PERT diagram view modes | Accepted | 2026-11-12 |
+| [ADR-041](041-risk-analysis.md) | Project risk analysis | Accepted | 2026-11-16 |
 
 ---
 

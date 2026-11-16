@@ -43,24 +43,64 @@ paths, so this is a UI-affordance gap, not a security one).
 
 ## Header buttons
 
-`headerButtons?: HeaderButtonDescriptor[]` — always-visible workflow buttons rendered via
-`HeaderButtonContainer`, for actions important enough not to bury in the options menu. `sale`'s
-Quote workflow (Confirm / Send / Accept / Decline) is the reference example.
+`headerButtons?: HeaderButtonDescriptor[]` are always-visible workflow buttons in the form's top
+toolbar, right of the options menu, for actions important enough not to bury in the menu. Several
+entries with different `states.visible` conditions make one slot "change label" across a workflow.
+`sale`'s Quote form (Confirm / Send / Accept / Decline) is the reference example:
 
 ```ts
+// core/modules/sale/views/quote_views.ts
 headerButtons: [
-  { label: 'Confirm', action: 'quote-confirm', states: { visible: { field: 'status', equals: 'draft' } } },
+  { name: 'sale.confirmQuote', label: 'Confirm',
+    states: { visible: { field: 'status', op: 'eq', value: 'draft' } } },
+  { name: 'sale.sendQuote', label: 'Send',
+    states: { visible: { field: 'status', op: 'eq', value: 'confirmed' } } },
+  { name: 'sale.declineQuote', label: 'Decline', variant: 'secondary',
+    states: { visible: { field: 'status', op: 'eq', value: 'sent' } } },
 ]
+
+registerHeaderButtonAction({
+  entity: 'quote',
+  name: 'sale.confirmQuote',
+  handler: async (ctx) => { await ctx.runAction!('confirm') },
+})
 ```
+
+`states.visible` unmounts the button; `states.readOnly` renders it disabled. The handler receives a
+context with `draft`, `setFieldAndCommit` (a plain field edit saved through Save's path),
+`relationOps`, `navigate(path)` (opens an ERP path) and `runAction(action, {body?, revalidate?})`.
+
+**Server-side workflow steps.** `runAction` calls `POST /{entity}/{id}/{action}` through the generic
+`EntityActions.action` Server Action and re-seeds the form from the `record` Go answers with;
+`revalidate` names other entities whose cached lists the step changes. Prefer it whenever the step
+must be checked or atomic on the server (sale's quote confirm/send/accept, invoice confirm/send:
+`core/modules/sale/workflow.go`). A refusal's Go message shows beside the buttons.
 
 ## Status bar
 
-`statusBar?: string` — names a `selection` field rendered as a read-only breadcrumb across the top
-of the form, showing the record's progression through its states at a glance.
+`statusBar?: { field: string; editable?: boolean }` names a `selection` field rendered as a
+breadcrumb of its values across the top of the form. A value the field's options leave out still
+shows, last.
 
 ```ts
-statusBar: 'status', // the same field Kanban might use as its column source
+statusBar: { field: 'status' },                 // sale invoices/quotes, event bookings: display only
+statusBar: { field: 'status', editable: true }, // crm: the breadcrumb is the field's widget
 ```
+
+- **Display only** (default): the field keeps its own widget in the form body.
+- **`editable: true`**: the field leaves the form body and the breadcrumb becomes its widget. Each
+  other step is a button and the current one opens a menu of every step (on a phone only the current
+  step shows). A pick sets the field, runs its `on_change`, then saves through the same path as Save
+  (chatter log included), or only sets the draft on an unsaved record. Needs
+  `<entity>:<entity>:write`; a read-only field keeps it a display.
+
+**Runtime override.** An admin can pick, per entity, another selection field and/or a subset of its
+values as steps, from Settings → Apps → *module* (`StatusBarSettings`, listed for every form that
+declares `statusBar`). It is stored in `app_settings` `views.<entity>.status_bar` as `{field, steps}`
+(null part = not overridden) through `GET|PUT /api/v1/settings/views/:entity/status_bar`
+(`settings:views:*`). An override can't add a breadcrumb to a form without one; an unknown field
+falls back to the module's, unknown steps are dropped, and saving the module default stores nulls so
+values the module adds later show up on their own.
 
 ## Related
 

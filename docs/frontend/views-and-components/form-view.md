@@ -35,14 +35,15 @@ Every form route gets, unconditionally, in one toolbar row above the form:
   **Delete** when the caller holds `<entity>:<entity>:delete`. Delete commits at once, returns to
   the list and offers the [undo toast](undo-toast.md) (Recover calls the generic restore).
 - [Header buttons](form-chrome.md#header-buttons), if `headerButtons` is declared.
-- A [status bar](form-chrome.md#status-bar), if `statusBar` names a `selection` field.
+- A [status bar](form-chrome.md#status-bar), if `statusBar` names a `selection` field (editable
+  with `editable: true`, overridable per workspace).
 - A **record navigator** (`<` / `>`) stepping through the same filtered, sorted list the user just
   browsed (session-only `list-nav-store`), without going back to the list.
 - A [chatter panel](chatter-panel.md) — **on by default**; a module opts out with
   `showChatter: false`, and a workspace can override per entity
   (`/settings/views/:entity/chatter`).
 
-Errors from a save show in an `ErrorAlert`: missing required fields are named ("Fill in: …"),
+Errors from a save show as an error [banner](../index.md#banners) between the toolbar and the form card: missing required fields are named ("Fill in: …"),
 fields the form doesn't show are flagged as a model/form mismatch to report, and a **Copy
 details** button copies code, message, request id, page and time for an administrator.
 
@@ -68,6 +69,32 @@ const layout: LayoutNode = {
 leaves. The synthesized header/columns nodes carry stable ids (`__form_header`,
 `__form_columns`) so a [view extension](../view-engine.md#view-inheritance-extends) can address
 and reshape them even when a base module never declared an explicit layout.
+
+### Notebook pages that hide themselves
+
+A notebook page whose every field is hidden right now (`invisible`, `states.visible`, `groups`) drops
+its tab, and a selected page that hides itself falls back to the first one shown. That is how a form
+shows one of two pages by a record's kind: a contact of kind *company* shows its *Contacts* page, a
+person its *Companies* page.
+
+## Form context
+
+A form may name a settings endpoint in `formContext`. The loader reads it server-side (unreadable ⇒
+empty), and conditions test its keys as `context.<key>`. The context is never part of the draft, so it
+is never sent on save nor lost on reload.
+
+```ts
+// core/modules/warehouse: the product reference is typed only while auto-numbering is off
+formContext: '/settings/warehouse',
+// on the `reference` field:
+states: { readOnly: { field: 'context.auto_reference', op: 'eq', value: true } },
+```
+
+## Seeding a new record from the list filter
+
+The list URL's `filter[<col>]=` params ride along to the new form, which starts its **many2one** fields
+from them (other types are skipped). Creating from `/project/tasks?filter[project_id]=<id>` starts the
+task in that project.
 
 ## Related
 

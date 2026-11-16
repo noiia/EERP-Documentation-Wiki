@@ -54,6 +54,26 @@ dependency order, so every row goes through the same validation and permission c
 user's write, and per-record failures are collected into a summary instead of aborting. Event
 demo bookings go through the staff booking route, so seats, contacts and emails are real.
 
+The light seed also creates:
+
+- **Projects**: 3 small projects plus 2 large ones for the WBS and PERT views (10 phases → 6 work
+  packages → 2–3 steps, 220 tasks and 175 dependencies each, the first phases done and in the past;
+  `dev-seed-plan.ts`), tasks assigned to the signed-in admin, 4 color groups, OBS boxes linked to the
+  project company's contacts, and demo risks with their categories. Aggregates are left to the
+  database triggers. It is about 800 sequential requests, so the light seed takes noticeably longer.
+- **A demo website** (`seedWebsite`, content in `src/lib/dev-seed-website.ts`): home with welcome
+  text, an events carousel and a product grid, an events list, a product catalog and the detail pages
+  they link to. It adds the fields those blocks read to each table's published selection (keeping
+  existing ones and any forced filter), skips a page whose slug exists, and expires the site's
+  cached reads.
+
+!!! note "Re-running the light seed"
+    Re-running it duplicates projects and color groups (it doesn't check what exists), while website
+    pages with an existing slug are skipped.
+
+Settings → Developer also links to the cron list and to the
+[database manager](database-management.md) (`/database/management`, outside the ERP session).
+
 ## Related
 
 - [Notifications](notifications.md) · [List Read Performance](list-performance.md) · [Testing](../developer-guide/testing.md)

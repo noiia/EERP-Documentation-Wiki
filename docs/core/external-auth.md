@@ -55,7 +55,8 @@ The frontend's BFF owns the browser side of OIDC (state, nonce and PKCE verifier
   "ldap": {
     "url": "ldaps://dc.example.com", "bind_dn": "cn=eerp,ou=svc,dc=example,dc=com",
     "base_dn": "ou=people,dc=example,dc=com", "user_filter": "(sAMAccountName={username})",
-    "email_attr": "mail", "groups_attr": "memberOf", "default_role_id": null
+    "email_attr": "mail", "groups_attr": "memberOf", "photo_attr": "jpegPhoto",
+    "allow_plaintext": false, "default_role_id": null
   },
   "oidc": [{
     "id": "entra", "label": "Microsoft", "issuer": "https://login.microsoftonline.com/<tenant>/v2.0",
@@ -70,6 +71,29 @@ Secrets (`bind_password`, `client_secret`) are AES-GCM encrypted under `master_k
 write-only: an empty value on save keeps the stored one, but only while the LDAP url and bind
 DN / the OIDC issuer are unchanged — pointing a secret at a new server requires re-entering it.
 Edited in Settings → Authentication.
+
+### LDAP transport
+
+Use `ldaps://`, or `ldap://` with StartTLS. Certificates are checked against the system trust store
+and the URL's host name (an IP URL needs an IP SAN). Plain `ldap://` to a non-loopback host is refused
+unless the admin ticks **Allow an unencrypted connection (danger)** (`ldap.allow_plaintext`). That
+opt-in exists for directories without StartTLS such as LLDAP; with it on, the bind password and every
+user's password cross the network in clear, so keep it to a trusted network.
+
+### LDAP photos
+
+With `ldap.photo_attr` set (the *LLDAP defaults* preset fills `jpegPhoto`) and object storage
+configured, each LDAP sign-in copies the entry's JPEG/PNG photo (≤ 2 MB, anything else ignored with a
+warning) into the user's avatar: a picture on the anchor `(users, <user id>, avatar)` with the
+`users.avatar` flag set, replaced only when its bytes changed, cleared when the entry has none.
+
+- An empty `photo_attr` means "no sync", never "clear every avatar".
+- A failed sync is logged and never blocks the sign-in.
+- Photos sync only at sign-in: a directory change shows after the user's next LDAP login.
+- Avatars are served at `GET /api/v1/avatars/:user` (JWT, same tenant, staff only,
+  `Cache-Control: private, max-age=300`, 404 when none).
+- The anchor is reserved to this sync: the generic picture routes answer 403 on it, so a holder of
+  `pictures:pictures:write` can't replace a colleague's avatar.
 
 ## Security pitfalls
 

@@ -60,6 +60,10 @@ Two layers decide how a printed page looks, both editable without code:
 | Workspace letterhead | `reports.layout` setting, `GET\|PUT /api/v1/settings/reports/layout` (`settings:reports:*`) | `{footer, address}` stamped on every PDF (≤ 5 000 chars each) |
 | Named page formats | `report_page_format` table (`core/modules/reportlayout`, generic CRUD) | `name`, `width` / `height` / `unit` (`px`, `cm`, `in`), optional `padding`, text / muted / border / accent colors, `footer` / `address` overrides |
 
+The letterhead is printed only on reports whose resolved `chrome` asks for it, i.e. reports that
+`extends: 'core.default'` (every shipped one): see
+[Report View → Inheritance](../frontend/views-and-components/report-view.md#inheritance-the-letterhead-is-inherited-not-imposed).
+
 A `ReportDescriptor` opts into a format with `pageFormat: '<name>'`. Every override column is
 nullable: unset means "inherit the workspace letterhead" (footer/address) or the built-in default
 (padding 100 px, the default colors). Formats can be company-specific (`company_id`), like every

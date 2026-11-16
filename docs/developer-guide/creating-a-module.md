@@ -25,7 +25,7 @@ when that isolation genuinely matters.
 The WASM component is a second build target of the **same Go source tree** — not a separate
 language or toolchain. You need:
 
-- Go 1.26+ (the only toolchain required — no Rust, no `wasm32-unknown-unknown` target)
+- Go 1.27+ (the only toolchain required — no Rust, no `wasm32-unknown-unknown` target)
 - A directory inside one of the paths listed in `module_root` in `eerp-config.json`
 
 ---
@@ -40,7 +40,7 @@ Or scaffold it directly with the module-generator tool (recommended even for the
 see [Building a Module From Scratch](module-from-scratch.md)):
 
 ```bash
-go run ./tools/eerp-init-module -p core/modules/hr -t wasm
+(cd tools/eerp-init-module && go run . -p ../../core/modules/hr -t wasm)
 ```
 
 ---

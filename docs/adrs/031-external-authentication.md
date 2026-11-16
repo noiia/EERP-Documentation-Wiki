@@ -43,7 +43,23 @@ SAML, no password change from the ERP, no background directory sync (roles are s
 4. **LDAP** (`POST /api/v1/auth/ldap/login {username, password}`): service-account bind, search
    with the configured filter (`{username}` escaped per RFC 4515), exactly one entry required, then
    bind as that entry; the entry DN is the subject. `ldaps://`, or `ldap://` + StartTLS; plain
-   `ldap://` is refused outside loopback. LLDAP defaults are a preset, not a special case.
+   `ldap://` is refused outside loopback unless the admin ticks **Allow an unencrypted connection
+   (danger)** (`ldap.allow_plaintext`). That opt-in exists because some directories (LLDAP) have no
+   StartTLS and an `ldaps://` certificate is not always available. With it on, the bind password
+   and every user's password cross the network in clear, so it belongs only on a trusted network.
+   The certificate of `ldaps://` / StartTLS is verified against the system trust store and the URL's
+   host name (an IP URL needs an IP SAN). LLDAP defaults are a preset, not a special case.
+   **Photo sync.** `ldap.photo_attr` (the *LLDAP defaults* preset fills `jpegPhoto`) names the
+   entry's photo attribute, read as raw bytes. After each successful LDAP sign-in the photo becomes
+   the user's avatar: a picture on the anchor `(users, <user id>, avatar)` with the `users.avatar`
+   flag set, replaced only when its bytes changed (the object key embeds their hash), cleared when
+   the entry has no photo. Only JPEG/PNG up to 2 MB are taken; anything else is ignored with a
+   warning. Sync runs **only when `photo_attr` is set** (an empty attribute means "no sync", never
+   "clear every avatar") and only with S3 configured. Its failures are logged and never block the
+   sign-in. Avatars are served at `GET /api/v1/avatars/:user` (JWT, same tenant, staff only;
+   `Cache-Control: private, max-age=300`; 404 when none). The anchor is reserved to this sync:
+   the generic picture routes refuse to upload or delete it (403), so a holder of
+   `pictures:pictures:write` can't replace a colleague's avatar.
 5. **OIDC** — authorization code + PKCE (S256) + nonce, bouncing through the Next BFF; the ID
    token is verified by `go-oidc` (signature, `iss`, `aud`, `exp`, nonce). Several providers can be
    configured. The redirect URI is built **server-side** from the setting `erp_url` (a bare https
@@ -134,6 +150,8 @@ sequenceDiagram
   leaves a stale link that refuses the login (the user's email is already linked to the old
   subject) until an admin removes it by hand:
   `UPDATE auth_identity SET deleted_at = now() WHERE provider = 'ldap' AND subject = '<old DN>';`
+- Photos sync only at sign-in: a photo changed in the directory shows after the user's next LDAP
+  login, and clearing `photo_attr` leaves existing avatars in place.
 - Provisioning unique-violation races (two simultaneous first logins) end in the generic refusal;
   the user simply retries.
 - Register the exact callback URL at each provider; in host mode (ADR-026) `erp_url` is the ERP host.

@@ -52,6 +52,8 @@ Routes mount only when object storage is configured (see [Configuration](#config
 | `GET` | `/api/v1/pictures/:id` | `pictures:pictures:read` | Streams the image bytes. |
 | `DELETE` | `/api/v1/pictures/:id` | `pictures:pictures:delete` | Hard-deletes the metadata row, then best-effort deletes the S3 object. |
 
+| `GET` | `/api/v1/avatars/:user` | signed-in staff, same tenant | A user's avatar (synced from LDAP); `404` when none. The `(users, <user>, avatar)` anchor is written only by [LDAP photo sync](external-auth.md#ldap-photos): the generic `POST`/`DELETE` above answer `403` on it. |
+
 Allowed MIME types are whitelisted: `image/png`, `image/jpeg`, `image/webp`. The object key is derived, never client-supplied: `{tenant}/{table}/{record}/{field}/{uuid}` — so a listing of a tenant's bucket prefix is already scoped correctly, independent of the metadata table.
 
 ### Delete

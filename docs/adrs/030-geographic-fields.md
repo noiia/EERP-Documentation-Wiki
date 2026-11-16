@@ -21,9 +21,11 @@ declarative (a struct tag), tenant-safe and usable by any module.
 
 ## Decision
 1. **PostGIS, `geography(…, 4326)`.** Distances are in meters on the globe with no projection
-   choice for callers. The DB image is `postgis/postgis:18-3.6` (dev, prod, CI); boot runs
+   choice for callers. The DB image is `postgis/postgis:18-3.7` (dev, prod, CI); boot runs
    `CREATE EXTENSION IF NOT EXISTS postgis` under the schema advisory lock, before any table DDL
-   (boot, `EnsureSchema`, `MigrateModules`, and so dbmanage create/switch).
+   (boot, `EnsureSchema`, `MigrateModules`, and so dbmanage create/switch). After an image upgrade,
+   the same pass runs `postgis_extensions_upgrade()` when an installed postgis extension lags the
+   server's version, so existing databases follow the image without a manual step.
 2. **Two ORM types**, `orm.GeoPoint` (`geography(Point,4326)`) and `orm.GeoShape`
    (`geography(Geometry,4326)`: Polygon, MultiPolygon, LineString). Declared as nullable pointers:
    `` Location *orm.GeoPoint `db:"geo_location,index=gist"` ``.

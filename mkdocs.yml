@@ -116,6 +116,9 @@ nav:
       - Database Management: core/database-management.md
       - "Versioning & Service Versions": core/versioning.md
       - Demo Data: core/demo-data.md
+      - Teams: core/teams.md
+      - Project App: core/project.md
+      - "Business Apps (Contact, Warehouse, Sale, CRM)": core/business-apps.md
   - Frontend:
       - Overview: frontend/index.md
       - "View Engine (@eerp/core-front)": frontend/view-engine.md
@@ -126,6 +129,9 @@ nav:
           - Overview: frontend/views-and-components/index.md
           - List View: frontend/views-and-components/list-view.md
           - Kanban View: frontend/views-and-components/kanban-view.md
+          - Gantt View: frontend/views-and-components/gantt-view.md
+          - "Diagram Views (WBS, PERT, OBS)": frontend/views-and-components/diagram-views.md
+          - Risk View: frontend/views-and-components/risk-view.md
           - Calendar View: frontend/views-and-components/calendar-view.md
           - Graph View: frontend/views-and-components/graph-view.md
           - Form View: frontend/views-and-components/form-view.md
@@ -189,3 +195,11 @@ nav:
       - "ADR-031: External Authentication": adrs/031-external-authentication.md
       - "ADR-032: Notifications": adrs/032-notifications.md
       - "ADR-033: List Read Performance": adrs/033-list-read-performance.md
+      - "ADR-034: Website Forms": adrs/034-website-forms.md
+      - "ADR-035: Website Language & Currency": adrs/035-website-language-and-currency.md
+      - "ADR-036: Website Theme": adrs/036-website-theme.md
+      - "ADR-037: Website Field Display": adrs/037-website-field-display.md
+      - "ADR-038: Teams": adrs/038-teams.md
+      - "ADR-039: Row-Level Access": adrs/039-row-level-access.md
+      - "ADR-040: Diagram Views (WBS/PERT)": adrs/040-diagram-views.md
+      - "ADR-041: Risk Analysis": adrs/041-risk-analysis.md

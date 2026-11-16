@@ -1,45 +1,55 @@
 # Calendar View
 
-A display mode of `viewType: 'tree'` — cards placed on a `date` field, draggable to reschedule.
-Like Kanban, which field backs the Calendar is a per-workspace admin setting
-(`views.<entity>.fields`), not descriptor data — see [ADR-007](../../adrs/007-runtime-view-fields.md).
+A display mode of `viewType: 'tree'`: cards placed on a date field, draggable to reschedule.
+Like Kanban, the field comes from the module's `viewModeDefaults.calendarDateField` or a workspace
+admin's override (`views.<entity>.fields`, which wins when non-null). See
+[ADR-007](../../adrs/007-runtime-view-fields.md).
 
 ---
 
-## Drag behavior
+## What it shows
 
-Every drag in the Calendar renderer (and in Kanban) acts **immediately** and reverts on error —
-there is no blocking "are you sure?" confirmation. Dragging a record off the calendar grid clears
-its date field the same way; because that's a destructive-feeling action, it's the one place in
-the engine that shows the [undo toast](undo-toast.md) rather than acting silently (see
-[ADR-016](../../adrs/016-undo-toast.md)).
+A month grid (the current month's own days only: no adjacent-month filler, no week or day view)
+positioning records by their date field, plus an **Unscheduled** panel for records with none.
+The visible month is fetched with a `gte`/`lt` range on the date field (up to
+`CALENDAR_MONTH_LIMIT`, with a "shown this month" caption past it) and the unscheduled records with
+`empty[<date>]`, again on every month change. Counts render through `formatTotal`.
 
 ```ts
-// Nothing calendar-specific in the descriptor — any `type: 'date'` field is eligible:
+// Nothing calendar-specific in the descriptor: any date field is eligible.
 { name: 'execution_date', label: 'Run at', type: 'date' }
 ```
 
-Settings → Views only offers `type: 'date'` fields as Calendar candidates, mirroring Kanban's
-`type: 'selection'` restriction.
+Settings → Views offers only date fields as Calendar candidates.
+
+## Drag behavior
+
+Every drag acts **immediately** and reverts on error; there is no confirmation. Dropping a card on
+the Unscheduled panel clears its date field and shows the [undo toast](undo-toast.md)
+([ADR-016](../../adrs/016-undo-toast.md)). Writes go through `useOptimisticFieldMove`, shared with
+Kanban and Gantt: a card ignores new moves while its write is pending, and a refusal restores only
+that card's fields. Without write permission nothing drags. There is no keyboard path yet.
+
+## Quick create
+
+With `<entity>:<entity>:write`, a click on an empty spot of a day opens the entity's form as a
+dialog, pre-filled with that date and the many2one values the list is filtered on. The created
+record is added in place.
 
 ## Card coloring
 
-`ViewModeDefaults.calendarColorField?: string` names a boolean field whose `true` value tints a
-card — a fixed, module-declared hint, not a workspace preference (no runtime override path exists,
-unlike the date-field picker above). [Cron](../../core/cron.md) is the reference example: a failed
-run's card renders red.
+- `ViewModeDefaults.calendarColorField?: string` names a boolean field whose `true` value gives the
+  card a red accent. It is module-declared only (no runtime override). [Cron](../../core/cron.md) is
+  the reference example: a failed run's card renders red.
+- `ViewModeDefaults.colorTagsField` adds a 4px color ribbon on top of each card, one segment per
+  color group (see [Gantt View](gantt-view.md#color-groups)).
 
 ```ts
-// on the FrontModule route's descriptor:
 viewModeDefaults: { calendarColorField: 'failed' }
 ```
 
-See [ADR-017: Background Cron Scheduler](../../adrs/017-cron-scheduler.md) for why this shipped as
-a generic engine primitive instead of a cron-only special case.
-
 ## Related
 
-- [Kanban View](kanban-view.md) · [Graph View](graph-view.md)
+- [Kanban View](kanban-view.md) · [Gantt View](gantt-view.md) · [Graph View](graph-view.md)
 - [Undo Toast](undo-toast.md)
 - [ADR-007: Runtime-Configurable View Fields](../../adrs/007-runtime-view-fields.md)
-- [Background Cron Scheduler](../../core/cron.md) — the `calendarColorField` reference consumer

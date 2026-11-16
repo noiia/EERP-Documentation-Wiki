@@ -27,7 +27,8 @@ sequenceDiagram
 
 ## Raising notifications from code
 
-Core code and modules use one API. Register a category once, at `init()`:
+Core code and modules use one API. Built-in categories are `cron`, `dev_seed` and `teams` (Teams
+@mentions). Register a category once, at `init()`:
 
 ```go
 func init() {

@@ -16,7 +16,7 @@ We'll build `expense` (a simple expense-tracking module) end to end.
 ## 1. Scaffold it
 
 ```bash
-go run ./tools/eerp-init-module -p core/modules/expense -t go
+(cd tools/eerp-init-module && go run . -p ../../core/modules/expense -t go)
 ```
 
 | Flag | Meaning |
@@ -174,7 +174,7 @@ descriptor contract.
 ## 7. Run and click around
 
 ```bash
-make run-front      # regenerates the module manifest on start
+make run-front-dev  # regenerates the module manifest on start
 ```
 
 The catch-all route resolves `/expense`, runs the permission guard, server-fetches, and renders —

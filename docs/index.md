@@ -65,7 +65,7 @@ graph TD
 
 | Layer | Technology | Why |
 |---|---|---|
-| Backend | Go 1.26 | Static binaries, excellent concurrency, strong type system |
+| Backend | Go 1.27 | Static binaries, excellent concurrency, strong type system |
 | ORM | Custom (pgx v5) | Zero reflection at query time, ERP-specific features |
 | Module schema (optional) | Go → WASI (Wasmtime) | Sandboxed schema declaration via the `migrate()` ABI, when a module opts in; every shipped module today instead uses `"type": "go"` and the ORM's own auto-migration |
 | Module logic | Go (monolith) | Zero IPC overhead, full ORM access, single binary deploy |
@@ -109,6 +109,9 @@ graph TD
 | Manage several databases on one server | [Database Management](core/database-management.md) |
 | Know which version is running / add a service | [Versioning](core/versioning.md) |
 | Fill a workspace with demo data | [Demo Data](core/demo-data.md) |
+| Understand the shipped business apps | [Business Apps](core/business-apps.md) · [Project App](core/project.md) · [Teams](core/teams.md) |
+| Restrict rows per caller (members-only records) | [ORM → Row scope](core/orm.md#row-scope) · [ADR-039](adrs/039-row-level-access.md) |
+| Add a Gantt, WBS, PERT or OBS view | [Gantt View](frontend/views-and-components/gantt-view.md) · [Diagram Views](frontend/views-and-components/diagram-views.md) |
 | Understand the edge gateway / TLS+HTTP2 | [Architecture → Edge Gateway](architecture/index.md#edge-gateway-api-gateway) |
 | Compare how pictures/attachments/reports use S3 | [Object Storage Across Layers](architecture/object-storage-topology.md) |
 | Write tests | [Testing](developer-guide/testing.md) |
@@ -126,10 +129,10 @@ EERP/
 │   │   ├── app/                  # Build (wiring, routes) + Run (background jobs, serve)
 │   │   ├── module/               # module detection, loading, live lifecycle, App Store API
 │   │   ├── auth/ (+ providers/)  # sessions, users/roles admin, LDAP/OIDC sign-in
-│   │   ├── settings/ website/ notify/ presence/ mail/ payment/ …  # core services
+│   │   ├── settings/ website/ notify/ presence/ mail/ teams/ payment/ …  # core services
 │   │   └── testdb/               # the one way tests reach the database
 │   ├── orm/                      # custom ORM (public facade: core/orm)
-│   └── modules/                  # business modules (crm, contact, sale, event, website, …)
+│   └── modules/                  # business modules (crm, contact, sale, project, teams, event, website, …)
 │       └── <name>/               #   module.json, module.go, views/, reports/, i18n/
 ├── core-front/                   # Next.js service — pnpm workspace
 │   ├── packages/core-front/      #   @eerp/core-front: the view engine (the frontend ABI)

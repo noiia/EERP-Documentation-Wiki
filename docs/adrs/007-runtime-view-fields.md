@@ -43,3 +43,11 @@ An entity with no configured Kanban/Calendar field is not a misconfiguration: mo
 - [View Engine](../frontend/view-engine.md) — the descriptor contract this ADR deliberately keeps unchanged.
 - [ADR-006: Frontend View Inheritance](006-view-inheritance.md) — the build-time counterpart this ADR is an exception to.
 - [ADR-008: Default Form Anatomy](008-form-anatomy.md) — the three-way descriptor / `app_settings` / record-anchored-data split this ADR establishes half of.
+
+## Later additions (2026-11)
+
+The switcher has since grown Gantt, WBS, PERT, OBS and Risk modes. Gantt's start/end fields follow
+this ADR (module default + `gantt_start_field`/`gantt_end_field` override); the diagram, OBS and
+risk keys are module-declared only. A form's status breadcrumb got the same treatment
+(`views.<entity>.status_bar`). See [View Engine → Display modes](../frontend/view-engine.md#display-modes-and-runtime-view-settings)
+and [ADR-040](040-diagram-views.md).

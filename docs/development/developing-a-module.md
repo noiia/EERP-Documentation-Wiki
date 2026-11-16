@@ -6,7 +6,7 @@ This guide builds a new pure-Go module from scratch. We'll use `hr` (Human Resou
 
 ## Prerequisites
 
-- Go 1.26+, PostgreSQL running (see `compose.yml` — `make run-back` starts it)
+- Go 1.27+, PostgreSQL running (see `compose.yml` — `make run-back` starts it)
 - The EERP core repository checked out
 
 No extra toolchain: Go modules compile directly into the core binary.

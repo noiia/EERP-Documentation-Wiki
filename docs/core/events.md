@@ -12,7 +12,7 @@ anonymous visitors without ever overbooking. Design: [ADR-027](../adrs/027-booki
 | Table | Holds |
 |---|---|
 | `event` | `kind` (`sessions` \| `appointment`), IANA `timezone`, appointment settings (`slot_minutes`, `slot_capacity`, `buffer_minutes`, `booking_horizon_days`, `min_notice_hours`), `max_seats_per_booking`, optional `product_variant_id` (makes it paid), `published` |
-| `event_session` | `starts_at` / `ends_at`, `capacity`, read-only `seats_taken`, optional `price` |
+| `event_session` | `starts_at` / `ends_at`, `capacity`, read-only `seats_taken`, read-only `remaining_seats` (a stored generated column, `capacity - seats_taken`, so lists filter, sort and graph on it; the public JSON key stays `seats_left`), optional `price` |
 | `event_availability` | weekday + local `HH:MM` window (appointment events) |
 | `event_booking` | a session **xor** a slot, contact, seats, `status`, check-in, invoice link; `cancel_token` never serialized |
 
@@ -38,6 +38,9 @@ descriptors only. Overrides exist **only where seats must stay consistent**:
   moving it re-syncs its bookings' denormalized `starts_at` (the bookings calendar's date).
 
 Statuses holding seats: `confirmed`, `attended`, `no_show`, `pending_payment`.
+
+On the event form, slot length and buffer (stored as minutes) are edited as hours and minutes with
+the `number/duration` widget.
 
 ## Capacity without overbooking
 

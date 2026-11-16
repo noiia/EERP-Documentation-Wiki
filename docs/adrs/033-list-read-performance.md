@@ -1,11 +1,10 @@
 # ADR-033: List read performance: bounded totals and automatic trigram indexes
 
 **Status**: Accepted. Builds on [ADR-015](015-search-filter-bar.md) (the `search[<col>]` filter) and
+[ADR-023](023-optional-redis-query-cache.md) (the read cache).
 **Date**: 2026-10-13
 
 ---
-
-[ADR-023](023-optional-redis-query-cache.md) (the read cache).
 
 ## Context
 At 100k rows per table the generic list (`GET /api/v1/{table}`) was slow for two reasons, both

@@ -34,7 +34,15 @@ List each view file under `static_files.views`. The discovery codegen resolves t
 
 ## 2. Add `@eerp/core-front` as a dependency
 
-The module's `package.json` depends on the engine (link it for local dev). The engine *is* the frontend ABI — descriptors, the `FrontModule` type, and (transitively) the renderers all come from it.
+The module's `package.json` depends on the engine (link it for local dev) and must declare both
+TypeScript lines every workspace package uses (TS 7 compiler beside the TS 6 API, see
+[Frontend Overview](../frontend/index.md#typescript-7-beside-the-typescript-6-api)):
+
+```json
+"@typescript/native": "npm:typescript@^7.0.2",
+"typescript": "npm:@typescript/typescript6@^6.0.2"
+```
+ The engine *is* the frontend ABI — descriptors, the `FrontModule` type, and (transitively) the renderers all come from it.
 
 ```jsonc
 {
@@ -108,7 +116,7 @@ What you did **not** write: no data fetching (the server loader does it, cached 
 
 Need a view type that doesn't exist yet? That is one store factory + one renderer + one server loader path in `@eerp/core-front` — added once, available to every entity.
 
-Every `tree` view also gets a **display-mode** switcher (`List | Kanban | Calendar | Graph`) for free — no descriptor changes required. Which field backs Kanban's columns or Calendar's dates is a workspace admin setting made later from Settings → Views, not something a module declares. See [View Engine → Runtime view settings](../frontend/view-engine.md#runtime-view-settings-kanbancalendargraph).
+Every `tree` view also gets a **display-mode** switcher (`List | Kanban | Calendar | Graph | Gantt | WBS | PERT | OBS | Risk`) for free. A module may suggest which fields back Kanban, Calendar and Gantt through `viewModeDefaults` (a workspace admin can override them from Settings → Views); the diagram and risk modes are enabled only by `viewModeDefaults`. See [View Engine → Display modes](../frontend/view-engine.md#display-modes-and-runtime-view-settings).
 
 ---
 
@@ -136,7 +144,7 @@ Set `permission` per route (the **server** enforces it) and optionally `permissi
 Ensure the module's root is in the repo-root `eerp-config.json` `module_root` (CRM's already is), then rebuild. The codegen scans the roots, statically imports each view file, and registers its `FrontModule`. The catch-all route `app/[...module]/page.tsx` resolves the new paths, runs the guard, server-fetches, and renders.
 
 ```bash
-make run-front      # dev: regenerates the manifest on start and on module.json changes
+make run-front-dev  # dev: regenerates the manifest on start and on module.json changes
 ```
 
 The generated `apps/shell/src/generated/generated-modules.ts` is **gitignored** — never commit it; it is regenerated on every build.

@@ -127,8 +127,11 @@ deployment, a locked-out admin), so it cannot ride the normal JWT session model.
   (`seedUUID(DevTenantID, "permission:*:*:*")`) for both seed paths instead of two rows sharing a
   code.
 - **S3 extraction is manifest-driven, not a bucket dump.** `BuildManifest` queries the database
-  being extracted (not necessarily the active one) for every `picture`/`attachment` row's
-  `object_key` — this is what scopes an extraction to exactly that database's own objects out of
+  being extracted (not necessarily the active one) for the `object_key` of every row in
+  `manifestSources`: `picture`, `attachment`, and the Teams app's `chat_attachment` and live
+  `team_file` rows (deleting a Teams file removes its object, so deleted rows are left out; a
+  table the database doesn't have is skipped). A module that stores objects under a table of its
+  own must be added to that list, or its files silently miss from extractions — this is what scopes an extraction to exactly that database's own objects out of
   a bucket potentially shared by several EERP databases on the same instance. Generated report
   PDFs (`internal/reports`) are deliberately never included: that package persists no DB row for
   its own S3 key at all, and a report is always regeneratable on demand from the underlying
@@ -139,7 +142,11 @@ deployment, a locked-out admin), so it cannot ride the normal JWT session model.
   (no temp file, no full in-memory buffering); `restore.go` writes the upload to a temp dir,
   `pg_restore`s the dump, then re-uploads each manifest object to the *current* instance's bucket
   at the *same* key — no key rewriting, since keys are tenant/table/record/field-scoped, never
-  environment-scoped.
+  environment-scoped. The restore reads the dump's table of contents first and leaves out any
+  extension the target server doesn't ship, with the schemas it owns: a database first created by
+  an older PostGIS image carries `postgis_tiger_geocoder`, which PostGIS 3.7 images dropped and
+  EERP never used, and a strict restore would fail on it. A failed restore drops the database it
+  created, so the next attempt can reuse the name.
 - **Frontend:** `core-front/apps/shell/app/database/management/page.tsx` is a plain client
   component, deliberately outside `requireAuth()` and the descriptor-driven view engine — this
   route must render for a fully anonymous visitor. No BFF/Server Actions: the browser calls

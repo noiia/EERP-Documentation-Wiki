@@ -1,8 +1,8 @@
 # Relation Widgets
 
 A `type: 'relation'` field carries a `relation: RelationDescriptor` (see [View Engine → Relation
-Widgets](../view-engine.md#relation-widgets)) and renders as one of five widgets — three defaults,
-one per relation kind, plus two overrides.
+Widgets](../view-engine.md#relation-widgets)) and renders as one of six widgets: three defaults,
+one per relation kind, plus three opt-ins (`carousel`, `summary`, `colortags`).
 
 ---
 
@@ -26,11 +26,20 @@ one per relation kind, plus two overrides.
 | Option | Kind | Effect |
 |---|---|---|
 | `relation.filter: { col: value }` | m2o, m2m | static server-side scope on every search/prefill — the picker only ever offers matching rows |
+| `relation.filterFields: { relatedCol: ownField }` | m2o | scopes the picker by **this record's draft**, merged over `filter`, left out while the own field is empty (a task's stage offers only its project's stages: `{ project_id: 'project_id' }`) |
 | `relation.formPath: '/x/:id'` | o2m | clicking a row opens that record's own form |
 | `relation.inside: { field, zone }` | o2m | instead of `inverseField`: the records whose point lies in this record's zone ([Geographic Widgets](geo-widgets.md)) |
 | `widgetOptions.fillFields: { col: field }` | m2o | picking a record copies its columns into sibling fields (e.g. an invoice's bill-to snapshot) — no extra fetch |
 | `widgetOptions.deletable` | o2m | a trash column; the row disappears only once Go confirms the delete |
 | `widgetOptions.reverse` | o2m | newest first (`order=-created_at`) |
+
+### Editing a one-to-many row
+
+Double-clicking a row of an o2m table (line items, billing lines…) opens the create dialog on that
+row: the draft starts from it, Save goes through `RelationOps.update`, and the inverse foreign key
+stays hidden. It is off on a read-only form and on a table with `formPath` (whose click opens the
+row's own form). After a create or an edit the table refetches its page (Go recomputes a line's
+totals) and the form's `totals/recap` follows.
 
 ### Paged one-to-many grids
 
@@ -63,6 +72,25 @@ behind "add a new contact without leaving the CRM form."
 
 `propertymanagement`'s Equipment "Photos" field is the shipped `carousel` example.
 
+## Color tags
+
+`widget: 'colortags'` (`RelationColorTagsWidget`) is a many2many-only opt-in for related records
+carrying a color (`widgetOptions.colorField`, default `'color'`): chips with a color dot, in junction
+creation order (the order Gantt stripes follow). Its "Create a new …" line opens a dialog asking only
+a name and a color, creates the record, then links it. Read-only ⇒ chips only. Colors reach CSS only
+as plain `#rrggbb`; the storing service should validate them too (Project's `project_color` answers
+422 otherwise).
+
+```ts
+// core/modules/project/views/project_views.ts
+{ name: 'color_groups', label: 'Color groups', type: 'relation', widget: 'colortags',
+  relation: { entity: 'project_color', kind: 'many2many', via: 'project_task_color',
+              viaFields: { own: 'task_id', related: 'color_id' }, labelField: 'name' } }
+```
+
+A list naming this field in `viewModeDefaults.colorTagsField` paints its records with these colors
+(see [Gantt View](gantt-view.md#color-groups)).
+
 ## Batched many-to-many resolution
 
 Resolving a set of linked records from a set of junction rows is **one** call, not one per row:
@@ -82,5 +110,6 @@ GraphQL is usually reached for.
 ## Related
 
 - [View Engine → Relation Widgets](../view-engine.md#relation-widgets) · [→ Relations (ORM side)](../../core/orm.md#relations)
+- [Search & Filter Bar](search-filter-bar.md) · [Gantt View](gantt-view.md)
 - [Totals Widget](totals-widget.md) — often paired with an o2m relation of line items
 - [ADR-018: HTTP/2 Edge & REST Batching](../../adrs/018-http2-edge-rest-batching.md)

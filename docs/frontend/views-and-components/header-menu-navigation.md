@@ -17,6 +17,16 @@ automatically, labeled from `navLabel` (falling back to a derived label from the
 { path: '/crm/internal-report', descriptor: { ...reportView, hideFromTopBar: true }, permission: 'crm:contacts:read' }
 ```
 
+`navQuery` appends a `?…` query to that menu line (and, for a module's first route, to its app tile):
+a removable default filter. Project hides archived projects this way:
+
+```ts
+{ path: '/project', descriptor: { entity: 'project', viewType: 'tree', navLabel: 'Projects',
+                                  navQuery: '?filter[active]=true', /* … */ } }
+```
+
+The filter arrives as an ordinary search-bar chip the user can remove, unlike a fixed `listFilter`.
+
 ## Hand-placed menu entries
 
 Only the **current app's** menus show in the top bar. Each app gets one menu per listed route, any

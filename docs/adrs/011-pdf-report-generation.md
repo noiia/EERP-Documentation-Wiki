@@ -51,6 +51,20 @@ render logic. Not built until multiple workers are actually needed.
 **Report authoring: declarative `ReportDescriptor`**, mirroring the existing `ViewDescriptor`
 contract — a `layout` tree of typed nodes bound to the same entity field data forms already use.
 
+**Report inheritance: the letterhead is inherited, not imposed (2026-10-18).** The print route used
+to wrap **every** report in the letterhead header (company logo + configured address) and footer,
+coupling a document's look to the route: a report that must not carry the letterhead (a label sheet,
+a plain export) had no way out. Instead a `ReportDescriptor` may `extends` another by name and
+declares `chrome: { header?, footer? }`; the engine ships one abstract base, `defaultReport`
+(`core.default`: header + footer around a `slot`), and the print route prints the letterhead **only**
+for a report whose resolved chrome asks for it. `resolveReports` (run by
+`ModuleRegistry.buildReportRegistry`) flattens a chain: the child's layout goes in the parent's
+`slot` (appended without one), chrome merges key by key, `pageFormat` is inherited unless
+overridden, `abstract` is never inherited. Every report in the codebase extends `core.default` and
+only adds its own components; a module can also ship its own abstract base for its documents.
+Consequence: a new report that forgets `extends` prints without the letterhead, deliberately and
+visibly on the first print.
+
 **Delivery**: the core-side handler uploads the rendered PDF to Garage (S3-compatible), mirroring
 `internal/pictures`'s metadata-row/bytes-in-S3 split, and hands the client a download URL.
 

@@ -93,11 +93,56 @@ A validation middleware on create/update checks:
   `settings`, `legal-notice`…) nor a module name;
 - the layout: a **36-column grid** of blocks with unique ids and non-negative geometry, and a
   closed block-type set — `text`, `image`, `hero`, `section`, `record_list`, `record_detail`,
-  `record_carousel`, `image_carousel`, `event_booking`, `appointment_booking`, `event_list`.
-  A block's `config` is opaque to Go. The set is kept equal to the frontend's `BLOCK_TYPES` by a test.
+  `record_carousel`, `image_carousel`, `event_booking`, `appointment_booking`, `event_list`,
+  `form`, `search`. A block's `config` is opaque to Go, except a `form` block's, which is checked
+  against the form-target registry (below). The set is kept equal to the frontend's `BLOCK_TYPES` by a test.
 
 A page with a null `layout` is simply empty. The page editor and the block catalog are
 described in [Website Builder](../frontend/website-builder.md).
+
+## Forms
+
+A page's `form` block writes into tables a module registers in its `Register()` with
+`formtarget.RegisterFormTarget(table, columns…)` (`internal/website/formtarget`; `contact` and `crm`
+today). Saving a layout validates the block against that registry: registered tables and columns,
+≤ 10 targets, ≤ 60 fields, each column written once per target, links only to an earlier target, and
+`*_id` columns only via links or fixed values ([ADR-034](../adrs/034-website-forms.md)).
+
+| Route | Auth | Purpose |
+|---|---|---|
+| `POST /api/v1/website/forms/:page_id/:block_id` | anonymous or website token, public rate limit | `{values: {<field id>: value}}` → 201; 422 `VALIDATION_ERROR` with `fields`; 401 when `login_required` and anonymous; 404 unpublished or missing |
+| `GET /api/v1/website/me/contact` | website token | the visitor's contact, for prefill |
+| `GET /api/v1/settings/website/form_targets` | `settings:website:read` | the registry, active modules only |
+
+The submission reads the form's definition from the stored published layout, never the request,
+is refused while a target's module is inactive, and writes every target in one transaction. A
+`contact` target updates a signed-in visitor's own website contact (never their email nor their
+account); an anonymous submission finds or creates the contact by email and never overwrites an
+existing one: the typed values become a log message in its chatter.
+
+!!! warning "Pitfall"
+    A table missing from `RegisterFormTarget` is never offered, and a layout naming it is a 400.
+
+## Language and currency
+
+`GET|PUT /api/v1/settings/website/localization` (`settings:website:*`, key `website.localization`)
+holds the site's `default_locale`, `default_currency`, the offered `currencies` and per-currency rate
+`overrides` (`1 base = x`); GET also returns the `base` currency and the `live` rates. The anonymous
+`GET /api/v1/public/localization` returns `{default_locale, default_currency, base, rates, currencies,
+date_format}`, with effective rates (override, else live; a currency with neither is dropped).
+
+Prices stay stored and charged in the workspace currency; other currencies are display-only. Live
+rates come from the ECB daily feed, refreshed every 6 h in the background (never on a request), so
+they are empty until the first fetch after a restart. A website account stores its picks with
+`PUT /api/v1/website/me/preferences` (`preferred_locale`, `preferred_currency`); anonymous visitors
+keep cookies. See [ADR-035](../adrs/035-website-language-and-currency.md).
+
+## Workflow map positions
+
+`GET|PUT /api/v1/settings/website/workflow_layout` (`settings:website:*`) stores where staff placed
+the Website app's workflow-map boxes, `{positions: {<node id>: {x, y}}}`, shared by the tenant's
+staff. A PUT replaces the whole set (≤ 2000 ids, finite coordinates within ±10⁶). Only positions:
+the links live in the pages' layouts.
 
 ## Routing: path or host mode
 
@@ -139,3 +184,4 @@ anonymously in `GET /api/v1/public/site`.
 
 - [Events & Booking](events.md) — the main consumer of visitor accounts
 - [Website Builder (frontend)](../frontend/website-builder.md) · [Permissions](permissions.md)
+- [ADR-034](../adrs/034-website-forms.md) · [ADR-035](../adrs/035-website-language-and-currency.md) · [ADR-036](../adrs/036-website-theme.md) · [ADR-037](../adrs/037-website-field-display.md)
